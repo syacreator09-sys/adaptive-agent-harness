@@ -16,6 +16,6 @@ The provider subprocess receives `AAH_GUARDIAN_MODE`, `AAH_TARGET_ROOT`, and `AA
 
 ## Codex enforcement
 
-AAH launches Codex with its native sandbox boundary. Reviewer/evaluator roles use `read-only`; implementation roles use `workspace-write`. AAH does not switch Codex to danger/full-access automatically. Project-specific Codex rules may further tighten this boundary without changing AAH core.
+AAH launches Codex with its native OS sandbox boundary and `--ask-for-approval never` for non-interactive runs. Reviewer/evaluator roles use `read-only`; implementation roles use `workspace-write`. During `factory setup`, AAH idempotently adds named `aah_readonly` and `aah_workspace` permission profiles to the project's `.codex/config.toml` without changing the user's default profile. The AAH workspace profile keeps `.git`, `.claude`, `.codex`, and all `.aah/**` read-only and denies common `.env*` paths. Existing valid Codex configuration is preserved; malformed config is left untouched with a warning. AAH never switches Codex to danger/full-access automatically.
 
 Guardian never grants permissions that the underlying provider/OS sandbox denies.
