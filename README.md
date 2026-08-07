@@ -4,7 +4,7 @@
 
 It supports three power levels from one repository:
 
-- **LITE** — minimal Planner → Builder → Evaluator loop, deliberately preserving the strongest ideas from `santmun/claude-code-harness`.
+- **LITE** — minimal Planner → Builder → Evaluator loop with fresh independent agents, file-based coordination, binary acceptance criteria, Git checkpoints, findings, and bounded repair loops.
 - **PRO** — adds architecture, technical testing, dedicated fixing, progress detection, and stronger isolation.
 - **FACTORY** — decomposes large systems into a task DAG, runs bounded workers, integrates them, system-tests the result, performs independent/security review, and passes a deterministic Final Gate.
 
@@ -246,10 +246,6 @@ bash -n install.sh
 ```
 
 Real-provider testing is intentionally local/opt-in. There are **no GitHub Actions**.
-
-## Design heritage
-
-LITE is intentionally inspired by the excellent minimal pattern in `santmun/claude-code-harness`: separate Planner/Generator/Evaluator contexts, filesystem coordination, a closed rubric, Git checkpoints, findings, and bounded repair loops. See `THIRD_PARTY_NOTICES.md`.
 
 ## License
 
