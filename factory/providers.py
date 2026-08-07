@@ -3,6 +3,7 @@ import json, os, shutil, subprocess, uuid
 from pathlib import Path
 from typing import Any
 from .envs import EnvRouter
+from .codex_profiles import has_profiles
 
 class ProviderError(RuntimeError): pass
 
@@ -19,10 +20,7 @@ class ClaudeProvider(BaseProvider):
         if model: cmd += ["--model",model]
         if tools:
             tool_list=",".join(tools)
-            # --tools restricts tool visibility; --allowedTools pre-approves exactly that bounded set.
             cmd += ["--tools",tool_list,"--allowedTools",*tools]
-        # Deterministic headless behavior: anything outside the explicitly allowed set is denied.
-        # AAH's PreToolUse Guardian hook can still deny/ask before an allowed tool executes.
         cmd += ["--permission-mode","dontAsk"]
         cp=subprocess.run(cmd,cwd=str(cwd),env=env or self.env_router.sanitize_provider_env(),text=True,capture_output=True)
         if cp.returncode!=0: raise ProviderError(cp.stderr.strip() or f"claude exited {cp.returncode}")
@@ -35,7 +33,10 @@ class CodexProvider(BaseProvider):
     name="codex"
     def __init__(self, subscription_only: bool=True): self.env_router=EnvRouter(subscription_only)
     def run(self,prompt,cwd,model=None,tools=None,guardian="guarded",access="workspace-write",env=None):
-        cmd=["codex","exec","--json","--sandbox",access]
+        cmd=["codex","exec","--json","--sandbox",access,"--ask-for-approval","never"]
+        if has_profiles(cwd):
+            profile="aah_readonly" if access=="read-only" else "aah_workspace"
+            cmd += ["-c",f'default_permissions="{profile}"']
         if model: cmd += ["--model",model]
         cmd += [prompt]
         cp=subprocess.run(cmd,cwd=str(cwd),env=env or self.env_router.sanitize_provider_env(),text=True,capture_output=True)
@@ -73,29 +74,24 @@ class ProviderRegistry:
     @staticmethod
     def _claude_auth_status() -> dict[str,Any]:
         env=dict(os.environ)
-        # Subscription-first probe: do not let an API key make this machine look ready.
         env.pop("ANTHROPIC_API_KEY",None)
         env.pop("ANTHROPIC_AUTH_TOKEN",None)
         try:
             cp=subprocess.run(["claude","auth","status"],text=True,capture_output=True,timeout=6,env=env)
         except Exception as exc:
             return {"authenticated":None,"auth":"status_probe_unavailable","auth_detail":type(exc).__name__}
-        if cp.returncode==0:
-            return {"authenticated":True,"auth":"subscription_or_cli_managed"}
-        if cp.returncode==1:
-            return {"authenticated":False,"auth":"not_logged_in"}
+        if cp.returncode==0: return {"authenticated":True,"auth":"subscription_or_cli_managed"}
+        if cp.returncode==1: return {"authenticated":False,"auth":"not_logged_in"}
         return {"authenticated":None,"auth":"status_probe_unavailable"}
 
     @staticmethod
     def _codex_auth_status() -> dict[str,Any]:
-        env=dict(os.environ)
-        env.pop("OPENAI_API_KEY",None)
+        env=dict(os.environ); env.pop("OPENAI_API_KEY",None)
         try:
             cp=subprocess.run(["codex","login","status"],text=True,capture_output=True,timeout=6,env=env)
         except Exception as exc:
             return {"authenticated":None,"auth":"status_probe_unavailable","auth_detail":type(exc).__name__}
-        if cp.returncode==0:
-            return {"authenticated":True,"auth":"chatgpt_or_cli_managed"}
+        if cp.returncode==0: return {"authenticated":True,"auth":"chatgpt_or_cli_managed"}
         combined=((cp.stdout or "")+"\n"+(cp.stderr or "")).lower()
         if any(x in combined for x in ["unknown", "unrecognized", "unexpected argument", "usage:"]):
             return {"authenticated":None,"auth":"status_probe_unavailable"}
@@ -107,12 +103,9 @@ class ProviderRegistry:
         for name in ["claude","codex"]:
             path=shutil.which(name)
             info={"available":bool(path),"path":path,"version":cls._version(name) if path else None}
-            if not path:
-                info.update({"authenticated":False,"auth":"unavailable"})
-            elif name=="claude":
-                info.update(cls._claude_auth_status())
-            else:
-                info.update(cls._codex_auth_status())
+            if not path: info.update({"authenticated":False,"auth":"unavailable"})
+            elif name=="claude": info.update(cls._claude_auth_status())
+            else: info.update(cls._codex_auth_status())
             result[name]=info
         return result
 
