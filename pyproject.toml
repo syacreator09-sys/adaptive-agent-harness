@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "adaptive-agent-harness"
+version = "0.1.0"
+description = "Adaptive multi-agent build, verify and loop runtime"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [{name = "Adaptive Agent Harness contributors"}]
+keywords = ["agents", "claude-code", "codex", "harness", "automation"]
+
+[project.scripts]
+factory = "factory.cli:main"
+aah = "factory.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["factory*"]

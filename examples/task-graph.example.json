@@ -1,0 +1,7 @@
+{
+  "tasks": [
+    {"id": "T-001", "title": "backend API", "profile": "pro", "depends_on": [], "acceptance": ["API contract passes"]},
+    {"id": "T-002", "title": "frontend UI", "profile": "pro", "depends_on": ["T-001"], "acceptance": ["user flow passes"]},
+    {"id": "T-003", "title": "documentation", "profile": "lite", "depends_on": ["T-001"]}
+  ]
+}

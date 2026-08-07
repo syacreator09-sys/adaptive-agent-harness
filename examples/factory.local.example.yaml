@@ -1,0 +1,13 @@
+{
+  "execution": {"profile": "auto", "domain": "code", "max_lite_passes": 3, "max_pro_passes": 5},
+  "guardian": {"mode": "auto"},
+  "providers": {"strategy": "auto", "prefer_cross_provider_verification": true},
+  "billing": {"mode": "subscription_only", "api_fallback": false},
+  "models": {
+    "policy": "balanced",
+    "overrides": {
+      "planner": {"provider": "claude", "model": "opus"},
+      "builder": {"provider": "codex", "model": null}
+    }
+  }
+}

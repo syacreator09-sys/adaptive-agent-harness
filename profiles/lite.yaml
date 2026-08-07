@@ -1,0 +1,3 @@
+{
+  "description":"Santiago-inspired minimal reliable loop","flow":["planner","builder","evaluator","builder:fix","evaluator:fresh","final_gate"],"max_passes":3,"parallel":false
+}

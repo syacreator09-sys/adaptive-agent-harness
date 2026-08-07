@@ -1,0 +1,3 @@
+{
+  "description":"Engineering loop with architecture, technical testing and dedicated fixing","flow":["planner","architect","builder","tester","evaluator","fixer","tester","evaluator:fresh","final_gate"],"max_passes":5,"parallel":false
+}

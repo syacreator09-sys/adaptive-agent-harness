@@ -1,0 +1,5 @@
+{
+  "description":"DAG-driven multi-workstream orchestration with integration and system gates",
+  "flow":["planner","architect","task_graph","workers","integrator","system_tester","evaluator","security_reviewer","final_reviewer","final_gate"],
+  "parallel":"isolated_when_supported"
+}
