@@ -1,9 +1,11 @@
 import json
 import os
 import unittest
+import tempfile
 from pathlib import Path
 from unittest import mock
 from factory.providers import ClaudeProvider, CodexProvider, ProviderRegistry
+from factory.codex_profiles import install_profiles
 
 class ProviderCommandTests(unittest.TestCase):
     @mock.patch('subprocess.run')
@@ -22,10 +24,14 @@ class ProviderCommandTests(unittest.TestCase):
     @mock.patch('subprocess.run')
     def test_codex_review_is_read_only(self, run):
         run.return_value=mock.Mock(returncode=0,stdout='{}',stderr='')
-        CodexProvider().run('review',Path('.'),access='read-only')
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td); install_profiles(root)
+            CodexProvider().run('review',root,access='read-only')
         cmd=run.call_args.args[0]
         self.assertIn('--sandbox',cmd)
         self.assertEqual(cmd[cmd.index('--sandbox')+1],'read-only')
+        self.assertEqual(cmd[cmd.index('--ask-for-approval')+1],'never')
+        self.assertIn('default_permissions="aah_readonly"',cmd)
 
 class ProviderDiscoveryTests(unittest.TestCase):
     @mock.patch('factory.providers.shutil.which')
