@@ -25,4 +25,41 @@ class FinalGateTests(unittest.TestCase):
             result2 = FinalGate(run).evaluate(rubric, findings=[{"id":"F-1","severity":"major","status":"open"}])
             self.assertFalse(result2["done"])
 
+    def test_rubric_wrapped_in_criteria_dict_does_not_crash(self):
+        """Real bug found live (plan AUTONOMÍA TOTAL, 2026-08-07,
+        RUN-20260807-004): a real evaluator wrote RUBRIC.json as
+        {"criteria": [...]} instead of a bare list -- `for item in rubric`
+        iterated the dict's string keys and crashed with AttributeError
+        on item.get(...), killing the whole run before FINAL_REPORT was
+        ever written."""
+        with tempfile.TemporaryDirectory() as td:
+            run = Path(td)
+            ev = EvidenceStore(run)
+            ev.append({"id":"E-1","kind":"test","ok":True,"detail":"ok"})
+            rubric = {"criteria": [{"id":"R-1","status":"PASS","required":True,"evidence":["E-1"]}], "overall_verdict":"PASS"}
+            result = FinalGate(run).evaluate(rubric, findings=[])
+            self.assertTrue(result["done"])
+
+    def test_non_dict_rubric_item_is_unverified_not_a_crash(self):
+        with tempfile.TemporaryDirectory() as td:
+            run = Path(td)
+            result = FinalGate(run).evaluate(["R-1"], findings=[])
+            self.assertFalse(result["done"])
+            self.assertIn("R-1:status=UNVERIFIED", result["failures"])
+
+    def test_evidence_ref_key_and_type_based_reference_are_admissible(self):
+        """A real evaluator referenced evidence by its record "type"
+        (e.g. "unittest_run") under the key "evidence_ref", not by the
+        EvidenceStore's own auto-derived "id" under "evidence" -- neither
+        agents.py nor the .claude/agents/*.md contracts pin the exact
+        field name or reference scheme, and the type-based reference
+        does resolve to a real, admissible EVIDENCE.jsonl record."""
+        with tempfile.TemporaryDirectory() as td:
+            run = Path(td)
+            ev = EvidenceStore(run)
+            ev.append({"kind":"test","type":"unittest_run","detail":"OK"})
+            rubric = [{"id":"R-1","status":"PASS","required":True,"evidence_ref":["unittest_run"]}]
+            result = FinalGate(run).evaluate(rubric, findings=[])
+            self.assertTrue(result["done"])
+
 if __name__ == "__main__": unittest.main()
