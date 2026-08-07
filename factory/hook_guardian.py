@@ -25,6 +25,7 @@ def main() -> int:
     try:
         data=json.load(sys.stdin)
     except Exception:
+        # Fail closed only for malformed hook input in locked mode; otherwise avoid breaking Claude.
         if os.environ.get("AAH_GUARDIAN_MODE","guarded")=="locked":
             print("AAH Guardian: malformed hook input",file=sys.stderr); return 2
         return 0
@@ -40,6 +41,7 @@ def main() -> int:
             _decision("deny",d.reason); return 0
         if d.decision==Decision.REQUIRE_APPROVAL:
             _decision("ask",d.reason); return 0
+        # WARN is advisory in non-locked modes; normal Claude permissions still apply.
         return 0
     if name in {"Write","Edit","NotebookEdit"}:
         path=str(inp.get("file_path") or inp.get("notebook_path") or "")
