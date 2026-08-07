@@ -20,7 +20,10 @@ class ClaudeProvider(BaseProvider):
         if model: cmd += ["--model",model]
         if tools:
             tool_list=",".join(tools)
+            # --tools restricts tool visibility; --allowedTools pre-approves exactly that bounded set.
             cmd += ["--tools",tool_list,"--allowedTools",*tools]
+        # Deterministic headless behavior: anything outside the explicitly allowed set is denied.
+        # AAH's PreToolUse Guardian hook can still deny/ask before an allowed tool executes.
         cmd += ["--permission-mode","dontAsk"]
         cp=subprocess.run(cmd,cwd=str(cwd),env=env or self.env_router.sanitize_provider_env(),text=True,capture_output=True)
         if cp.returncode!=0: raise ProviderError(cp.stderr.strip() or f"claude exited {cp.returncode}")
@@ -41,6 +44,7 @@ class CodexProvider(BaseProvider):
         cmd += [prompt]
         cp=subprocess.run(cmd,cwd=str(cwd),env=env or self.env_router.sanitize_provider_env(),text=True,capture_output=True)
         if cp.returncode!=0: raise ProviderError(cp.stderr.strip() or f"codex exited {cp.returncode}")
+        # Codex exec JSON may be event JSONL; take the last textual agent message when possible.
         text=cp.stdout
         try:
             lines=[json.loads(x) for x in cp.stdout.splitlines() if x.strip().startswith("{")]
@@ -52,12 +56,15 @@ class CodexProvider(BaseProvider):
         return parse_agent_payload(text, provider="codex")
 
 def parse_agent_payload(text: str, provider: str) -> dict[str,Any]:
-    text=text.strip(); candidates=[text]
-    if "```json" in text: candidates.append(text.split("```json",1)[1].split("```",1)[0])
+    text=text.strip()
+    candidates=[text]
+    if "```json" in text:
+        candidates.append(text.split("```json",1)[1].split("```",1)[0])
     for c in candidates:
         try:
             value=json.loads(c)
-            if isinstance(value,dict): value.setdefault("provider",provider); return value
+            if isinstance(value,dict):
+                value.setdefault("provider",provider); return value
         except Exception: pass
     return {"summary":text,"provider":provider,"artifacts":{},"evidence":[]}
 
@@ -74,24 +81,30 @@ class ProviderRegistry:
     @staticmethod
     def _claude_auth_status() -> dict[str,Any]:
         env=dict(os.environ)
+        # Subscription-first probe: do not let an API key make this machine look ready.
         env.pop("ANTHROPIC_API_KEY",None)
         env.pop("ANTHROPIC_AUTH_TOKEN",None)
         try:
             cp=subprocess.run(["claude","auth","status"],text=True,capture_output=True,timeout=6,env=env)
         except Exception as exc:
             return {"authenticated":None,"auth":"status_probe_unavailable","auth_detail":type(exc).__name__}
-        if cp.returncode==0: return {"authenticated":True,"auth":"subscription_or_cli_managed"}
-        if cp.returncode==1: return {"authenticated":False,"auth":"not_logged_in"}
+        if cp.returncode==0:
+            return {"authenticated":True,"auth":"subscription_or_cli_managed"}
+        if cp.returncode==1:
+            return {"authenticated":False,"auth":"not_logged_in"}
         return {"authenticated":None,"auth":"status_probe_unavailable"}
 
     @staticmethod
     def _codex_auth_status() -> dict[str,Any]:
-        env=dict(os.environ); env.pop("OPENAI_API_KEY",None)
+        env=dict(os.environ)
+        env.pop("OPENAI_API_KEY",None)
         try:
             cp=subprocess.run(["codex","login","status"],text=True,capture_output=True,timeout=6,env=env)
         except Exception as exc:
             return {"authenticated":None,"auth":"status_probe_unavailable","auth_detail":type(exc).__name__}
-        if cp.returncode==0: return {"authenticated":True,"auth":"chatgpt_or_cli_managed"}
+        if cp.returncode==0:
+            return {"authenticated":True,"auth":"chatgpt_or_cli_managed"}
+        # Codex versions without `login status` must remain usable; execution will surface auth failure.
         combined=((cp.stdout or "")+"\n"+(cp.stderr or "")).lower()
         if any(x in combined for x in ["unknown", "unrecognized", "unexpected argument", "usage:"]):
             return {"authenticated":None,"auth":"status_probe_unavailable"}
@@ -103,9 +116,12 @@ class ProviderRegistry:
         for name in ["claude","codex"]:
             path=shutil.which(name)
             info={"available":bool(path),"path":path,"version":cls._version(name) if path else None}
-            if not path: info.update({"authenticated":False,"auth":"unavailable"})
-            elif name=="claude": info.update(cls._claude_auth_status())
-            else: info.update(cls._codex_auth_status())
+            if not path:
+                info.update({"authenticated":False,"auth":"unavailable"})
+            elif name=="claude":
+                info.update(cls._claude_auth_status())
+            else:
+                info.update(cls._codex_auth_status())
             result[name]=info
         return result
 
