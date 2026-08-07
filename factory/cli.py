@@ -31,13 +31,12 @@ def setup(args):
     (aah/"capabilities.json").write_text(json.dumps({"providers":providers,"tools":tools},indent=2)+"\n",encoding="utf-8")
     cfg=AAHConfig.load(target)
     if not args.non_interactive:
-        available=[k for k,v in providers.items() if v.get("available")]
+        available=[k for k,v in providers.items() if v.get("available") and v.get("authenticated") is not False]
         suggested="both" if len(available)>1 else available[0] if available else "auto"
         cfg.data["providers"]["strategy"]=_ask_choice("Provider strategy",["auto","claude","codex","both"],suggested)
         cfg.data["models"]["policy"]=_ask_choice("Model policy",["quality","balanced","economy"],cfg.data["models"]["policy"])
         cfg.data["execution"]["profile"]=_ask_choice("Default profile",["auto","lite","pro","factory"],cfg.data["execution"]["profile"])
         cfg.data["guardian"]["mode"]=_ask_choice("Guardian",["auto","open","guarded","locked"],cfg.data["guardian"]["mode"])
-        # V1 is intentionally subscription-only. API fallback stays disabled unless a future explicit adapter is installed.
         cfg.data["billing"]={"mode":"subscription_only","api_fallback":False}
     cfg.save(target)
     gi=target/".gitignore"
@@ -52,7 +51,7 @@ def doctor(args):
     if args.json: print(json.dumps(payload,indent=2))
     else:
         print(f"AAH doctor: {target}")
-        print("Providers: "+", ".join(f"{k}={'yes' if v['available'] else 'no'}" for k,v in providers.items()))
+        print("Providers: "+", ".join(f"{k}=installed:{'yes' if v['available'] else 'no'},auth:{'yes' if v.get('authenticated') is True else 'no' if v.get('authenticated') is False else 'unknown'}" for k,v in providers.items()))
         print("Stacks: "+(", ".join(project["stacks"]) or "unknown"))
         print("Billing: "+cfg.data["billing"]["mode"])
     return 0
@@ -82,8 +81,13 @@ def _configured_providers(cfg, discovered):
 
 def run_cmd(args):
     target=_target(args); cfg=AAHConfig.load(target); providers=_configured_providers(cfg,ProviderRegistry.discover()); router=AdaptiveRouter(providers)
-    if not any(v["available"] for v in providers.values()):
-        print("No provider CLI detected. Install/login to Claude Code or Codex, then run factory doctor.",file=sys.stderr); return 3
+    if not router.available():
+        installed=[k for k,v in providers.items() if v.get("available")]
+        if installed:
+            print("Provider CLI detected but no authenticated subscription session is ready. Login to Claude Code/Codex, then run factory doctor.",file=sys.stderr)
+        else:
+            print("No provider CLI detected. Install/login to Claude Code or Codex, then run factory doctor.",file=sys.stderr)
+        return 3
     def executor_factory(profile,domain):
         roles=_roles_for(profile,domain); assignments=router.assign_roles(roles,cfg.data["models"]["policy"],cfg.data["models"].get("overrides"))
         return AgentExecutor(target,assignments,subscription_only=cfg.data["billing"]["mode"]=="subscription_only",registry=AgentRegistry())

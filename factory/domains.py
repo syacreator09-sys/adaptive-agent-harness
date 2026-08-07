@@ -7,4 +7,5 @@ DOMAIN_DEFAULTS={
 def get_domain(name:str):
     if name not in DOMAIN_DEFAULTS: raise KeyError(name)
     return DOMAIN_DEFAULTS[name]
-def role_for(domain:str,canonical:str)->str: return get_domain(domain)["roles"].get(canonical,canonical)
+def role_for(domain:str, canonical:str)->str:
+    return get_domain(domain)["roles"].get(canonical,canonical)

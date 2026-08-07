@@ -20,3 +20,8 @@ class AutoBehaviorTests(unittest.TestCase):
         from factory.cli import _roles_for
         self.assertIn("content_producer", _roles_for("lite","content"))
         self.assertIn("fact_checker", _roles_for("pro","research"))
+
+class AuthAwareRoutingTests(unittest.TestCase):
+    def test_explicitly_logged_out_provider_is_not_schedulable(self):
+        r=AdaptiveRouter({"claude":{"available":True,"authenticated":False},"codex":{"available":True,"authenticated":None}})
+        self.assertEqual(r.available(),["codex"])

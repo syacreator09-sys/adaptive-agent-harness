@@ -28,6 +28,7 @@ class Guardian:
         r"\bDROP\s+DATABASE\b", r"\bDROP\s+TABLE\b", r"\bTRUNCATE\s+TABLE\b",
         r"\bproduction\b", r"\bprod\b", r"git\s+push\b",
     ]]
+    # Coordination runs are writable; runtime/config/auth surfaces are not.
     PROTECTED_WRITE_PREFIXES=(".git/", ".claude/", ".codex/", ".aah/runtime/", ".aah/bin/")
     PROTECTED_READ_PREFIXES=(".git/", ".aah/runtime/", ".aah/bin/")
     SENSITIVE_HOME_PARTS=("/.ssh/", "/.aws/", "/.config/gcloud/", "/.azure/", "/.kube/config")
@@ -63,16 +64,20 @@ class Guardian:
         return name==".env" or name.startswith(".env.")
 
     def can_read(self, path: str, root: str|None=None) -> bool:
-        clean=self._clean(path,root); absolute=path.replace("\\","/")
+        clean=self._clean(path,root)
+        absolute=path.replace("\\","/")
         if self._env_path(clean): return False
         if any(x in absolute for x in self.SENSITIVE_HOME_PARTS): return False
         if clean.startswith(self.PROTECTED_READ_PREFIXES): return False
         return True
 
     def can_write(self, path: str, root: str|None=None) -> bool:
-        clean=self._clean(path,root); absolute=path.replace("\\","/")
+        clean=self._clean(path,root)
+        absolute=path.replace("\\","/")
         if self._env_path(clean): return False
         if any(x in absolute for x in self.SENSITIVE_HOME_PARTS): return False
         if clean.startswith(self.PROTECTED_WRITE_PREFIXES): return False
-        if clean.startswith(".aah/") and not clean.startswith(".aah/runs/"): return False
+        # AAH run artifacts are intentionally writable coordination surfaces.
+        if clean.startswith(".aah/") and not clean.startswith(".aah/runs/"):
+            return False
         return True

@@ -35,6 +35,17 @@ class DiscoveryTests(unittest.TestCase):
         self.assertNotIn("OPENAI_API_KEY", sanitized)
         self.assertEqual(sanitized["PATH"], "/bin")
 
+    def test_review_roles_never_receive_project_secret_values(self):
+        env={"SECRET_TOKEN":"value","PUBLIC_URL":"https://x","PATH":"/bin"}
+        project={"env_names":["SECRET_TOKEN","PUBLIC_URL"],"env_classes":{"SECRET_TOKEN":"secret","PUBLIC_URL":"config"}}
+        router=EnvRouter(subscription_only=True)
+        for role in ["tester","evaluator","task_evaluator","system_tester","security_reviewer"]:
+            scoped=router.scoped_provider_env(project,role,{"required_env":["SECRET_TOKEN"]},env)
+            self.assertNotIn("SECRET_TOKEN",scoped)
+            self.assertEqual(scoped["PUBLIC_URL"],"https://x")
+        builder=router.scoped_provider_env(project,"builder",{"required_env":["SECRET_TOKEN"]},env)
+        self.assertEqual(builder["SECRET_TOKEN"],"value")
+
     def test_tool_registry_and_provider_discovery_are_adaptive(self):
         def fake_which(name):
             return f"/usr/bin/{name}" if name in {"git","claude"} else None
