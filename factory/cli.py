@@ -39,6 +39,7 @@ def setup(args):
         cfg.data["models"]["policy"]=_ask_choice("Model policy",["quality","balanced","economy"],cfg.data["models"]["policy"])
         cfg.data["execution"]["profile"]=_ask_choice("Default profile",["auto","lite","pro","factory"],cfg.data["execution"]["profile"])
         cfg.data["guardian"]["mode"]=_ask_choice("Guardian",["auto","open","guarded","locked"],cfg.data["guardian"]["mode"])
+        # V1 is intentionally subscription-only. API fallback stays disabled unless a future explicit adapter is installed.
         cfg.data["billing"]={"mode":"subscription_only","api_fallback":False}
     cfg.save(target)
     gi=target/".gitignore"
@@ -58,7 +59,8 @@ def doctor(args):
         print("Billing: "+cfg.data["billing"]["mode"])
     return 0
 
-def _runner(target,profile,executor): return {"lite":LiteRunner,"pro":ProRunner,"factory":FactoryRunner}[profile](target,executor)
+def _runner(target,profile,executor):
+    return {"lite":LiteRunner,"pro":ProRunner,"factory":FactoryRunner}[profile](target,executor)
 
 def _roles_for(profile:str,domain:str)->list[str]:
     canonical={
@@ -84,8 +86,10 @@ def run_cmd(args):
     target=_target(args); cfg=AAHConfig.load(target); providers=_configured_providers(cfg,ProviderRegistry.discover()); router=AdaptiveRouter(providers)
     if not router.available():
         installed=[k for k,v in providers.items() if v.get("available")]
-        if installed: print("Provider CLI detected but no authenticated subscription session is ready. Login to Claude Code/Codex, then run factory doctor.",file=sys.stderr)
-        else: print("No provider CLI detected. Install/login to Claude Code or Codex, then run factory doctor.",file=sys.stderr)
+        if installed:
+            print("Provider CLI detected but no authenticated subscription session is ready. Login to Claude Code/Codex, then run factory doctor.",file=sys.stderr)
+        else:
+            print("No provider CLI detected. Install/login to Claude Code or Codex, then run factory doctor.",file=sys.stderr)
         return 3
     def executor_factory(profile,domain):
         roles=_roles_for(profile,domain); assignments=router.assign_roles(roles,cfg.data["models"]["policy"],cfg.data["models"].get("overrides"))
@@ -98,7 +102,8 @@ def run_cmd(args):
     print(json.dumps(result,indent=2)); return 0 if result["done"] else 2
 
 def _resolve_run(target,run_id):
-    store=ArtifactStore(target); return store.get_run(run_id) if run_id else store.latest_run()
+    store=ArtifactStore(target)
+    return store.get_run(run_id) if run_id else store.latest_run()
 
 def status(args):
     target=_target(args); run=_resolve_run(target,args.run_id)
@@ -108,14 +113,16 @@ def status(args):
 def report(args):
     target=_target(args); run=_resolve_run(target,args.run_id)
     if not run: print("No runs",file=sys.stderr); return 1
-    p=run.run_dir/"FINAL_REPORT.md"; print(p.read_text(encoding="utf-8") if p.exists() else json.dumps(ArtifactStore.read_json(run.run_dir,"FINAL_REPORT.json",{}),indent=2)); return 0
+    p=run.run_dir/"FINAL_REPORT.md"
+    print(p.read_text(encoding="utf-8") if p.exists() else json.dumps(ArtifactStore.read_json(run.run_dir,"FINAL_REPORT.json",{}),indent=2)); return 0
 
 def resume(args):
     target=_target(args); run=_resolve_run(target,args.run_id)
     if not run: print("Run not found",file=sys.stderr); return 1
     req=ArtifactStore.read_json(run.run_dir,"REQUEST.json",{}); profile=req.get("profile","lite"); guardian=req.get("guardian","guarded")
     cfg=AAHConfig.load(target); providers=_configured_providers(cfg,ProviderRegistry.discover()); router=AdaptiveRouter(providers)
-    roles=_roles_for(profile,req.get("domain","code")); ex=AgentExecutor(target,router.assign_roles(roles,cfg.data["models"]["policy"]),cfg.data["billing"]["mode"]=="subscription_only")
+    roles=_roles_for(profile,req.get("domain","code"))
+    ex=AgentExecutor(target,router.assign_roles(roles,cfg.data["models"]["policy"]),cfg.data["billing"]["mode"]=="subscription_only")
     result=_runner(target,profile,ex).run(req.get("request","resume"),guardian=guardian,domain=req.get("domain","code"),run_id=run.run_id)
     print(json.dumps(result,indent=2)); return 0 if result["done"] else 2
 
@@ -144,8 +151,10 @@ def rollback(args):
     target=_target(args); run=_resolve_run(target,args.run_id)
     if not run: print("Run not found",file=sys.stderr); return 1
     state=ArtifactStore.read_json(run.run_dir,"STATE.json",{}); base=state.get("git_base") or ArtifactStore.read_json(run.run_dir,"REQUEST.json",{}).get("git_base")
-    if not base: print("No recorded git checkpoint; rollback refused.",file=sys.stderr); return 2
-    if not args.apply: print(f"Dry run: would restore tracked files from {base}. Re-run with --apply."); return 0
+    if not base:
+        print("No recorded git checkpoint; rollback refused.",file=sys.stderr); return 2
+    if not args.apply:
+        print(f"Dry run: would restore tracked files from {base}. Re-run with --apply."); return 0
     cp=subprocess.run(["git","-C",str(target),"restore","--source",base,"--staged","--worktree","."],text=True,capture_output=True)
     if cp.returncode: print(cp.stderr,file=sys.stderr); return cp.returncode
     print(f"Restored tracked files from {base}; untracked files were preserved."); return 0
@@ -162,7 +171,8 @@ def gate_cmd(args):
     print(json.dumps(result,indent=2)); return 0 if result["done"] else 2
 
 def build_parser():
-    p=argparse.ArgumentParser(prog="factory",description="Adaptive Agent Harness — LITE / PRO / FACTORY"); sub=p.add_subparsers(dest="cmd",required=True)
+    p=argparse.ArgumentParser(prog="factory",description="Adaptive Agent Harness — LITE / PRO / FACTORY")
+    sub=p.add_subparsers(dest="cmd",required=True)
     s=sub.add_parser("setup"); s.add_argument("--target"); s.add_argument("--non-interactive",action="store_true"); s.set_defaults(func=setup)
     d=sub.add_parser("doctor"); d.add_argument("--target"); d.add_argument("--json",action="store_true"); d.set_defaults(func=doctor)
     r=sub.add_parser("run"); r.add_argument("request"); r.add_argument("--target"); r.add_argument("--profile",choices=["auto","lite","pro","factory"],default="auto"); r.add_argument("--guardian",choices=["auto","open","guarded","locked"],default="auto"); r.add_argument("--domain",choices=["code","content","research","operations"],default="code"); r.set_defaults(func=run_cmd)
@@ -173,6 +183,7 @@ def build_parser():
     g=sub.add_parser("gate"); g.add_argument("run_id",nargs="?"); g.add_argument("--target"); g.set_defaults(func=gate_cmd)
     return p
 
-def main(argv=None): args=build_parser().parse_args(argv); return args.func(args)
+def main(argv=None):
+    args=build_parser().parse_args(argv); return args.func(args)
 
 if __name__=="__main__": raise SystemExit(main())
