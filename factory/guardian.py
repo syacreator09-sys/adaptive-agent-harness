@@ -66,6 +66,7 @@ class Guardian:
         compact=command.strip()
         if self._sensitive_command_text(compact):
             return CommandDecision(Decision.BLOCK,f"{role} cannot read sensitive paths from shell")
+        # Chaining/subshells make a read-only allowlist ambiguous; reviewers issue one verification command per tool call.
         if any(tok in compact for tok in [";","&&","||","`","$(",">","<"]):
             return CommandDecision(Decision.BLOCK,f"{role} shell command is outside the verification allowlist")
         if any(p.search(compact) for p in self.REVIEW_SAFE_COMMANDS):
