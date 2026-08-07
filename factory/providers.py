@@ -36,7 +36,15 @@ class CodexProvider(BaseProvider):
     name="codex"
     def __init__(self, subscription_only: bool=True): self.env_router=EnvRouter(subscription_only)
     def run(self,prompt,cwd,model=None,tools=None,guardian="guarded",access="workspace-write",env=None):
-        cmd=["codex","exec","--json","--sandbox",access,"--ask-for-approval","never"]
+        # `codex exec` is already non-interactive by design -- there is no
+        # approval prompt to skip, so no approval flag exists for it in
+        # current codex-cli (confirmed live against codex-cli 0.146.0's own
+        # `codex exec --help`: no --ask-for-approval, no --full-auto; the
+        # sandbox policy alone governs what the run may do). The old
+        # `--ask-for-approval never` flag AAH shipped with predates that and
+        # codex now rejects it outright ("unexpected argument"), so every
+        # codex-provider run failed before ever reaching the model.
+        cmd=["codex","exec","--json","--sandbox",access]
         if has_profiles(cwd):
             profile="aah_readonly" if access=="read-only" else "aah_workspace"
             cmd += ["-c",f'default_permissions="{profile}"']

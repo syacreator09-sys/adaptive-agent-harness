@@ -30,7 +30,12 @@ class ProviderCommandTests(unittest.TestCase):
         cmd=run.call_args.args[0]
         self.assertIn('--sandbox',cmd)
         self.assertEqual(cmd[cmd.index('--sandbox')+1],'read-only')
-        self.assertEqual(cmd[cmd.index('--ask-for-approval')+1],'never')
+        # codex-cli 0.146.0's `codex exec --help` has no --ask-for-approval
+        # (and no --full-auto) -- `exec` is already non-interactive, the
+        # sandbox policy alone governs the run. Confirmed live: the old
+        # flag made every codex-provider invocation fail before reaching
+        # the model ("unexpected argument '--ask-for-approval' found").
+        self.assertNotIn('--ask-for-approval',cmd)
         self.assertIn('default_permissions="aah_readonly"',cmd)
 
 class ProviderDiscoveryTests(unittest.TestCase):
