@@ -4,6 +4,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 from .models import RunHandle
+from .evidence import redact_text
 
 
 _RUN_ID_RE=re.compile(r"^RUN-[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -53,8 +54,6 @@ class ArtifactStore:
             run_dir=self.root/run_id
             run_dir.mkdir(parents=True,exist_ok=False)
         else:
-            # Two local workers can race between ID calculation and mkdir. mkdir is the lock;
-            # losers rescan and retry instead of crashing or sharing a run directory.
             for _ in range(1000):
                 candidate=self._validate_run_id(self._next_run_id())
                 run_dir=self.root/candidate
@@ -71,7 +70,7 @@ class ArtifactStore:
         for name in ["logs", "screenshots", "artifacts"]:
             (run_dir / name).mkdir()
         self.write_json(run_dir, "REQUEST.json", {
-            "request": request,
+            "request": redact_text(request),
             "profile": profile,
             "guardian": guardian,
             "domain": domain,
