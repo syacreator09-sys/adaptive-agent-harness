@@ -46,6 +46,13 @@ class Guardian:
         "tester", "evaluator", "task_evaluator", "system_tester",
         "security_reviewer", "content_evaluator", "fact_checker",
     }
+    # These role scopes apply only to native run coordination files. Product
+    # filesystem permissions remain governed separately.
+    TASK_ONLY_RUN_ROLES = {"worker", "task_evaluator"}
+    ROOT_ONLY_RUN_ROLES = {
+        "planner", "content_strategist", "architect", "builder", "fixer", "integrator",
+        "evaluator", "system_tester", "security_reviewer", "final_reviewer",
+    }
     ROLE_RUN_WRITES: dict[str, set[str]] = {
         "planner": {"SPEC.md", "RUBRIC.json", "PLANNING_REPORT.md"},
         "content_strategist": {"SPEC.md", "RUBRIC.json", "PLANNING_REPORT.md"},
@@ -163,6 +170,11 @@ class Guardian:
         name = Path(relative).name
         return name == ".env" or name.startswith(".env.")
 
+    @staticmethod
+    def _is_task_artifact(relative: str) -> bool:
+        parts = Path(relative).parts
+        return len(parts) >= 6 and parts[0] == ".aah" and parts[1] == "runs" and parts[3] == "tasks"
+
     def can_read(self, path: str, root: str | None = None) -> bool:
         resolved, relative = self._resolve_inside(path, root)
         if resolved is None or relative is None:
@@ -192,6 +204,11 @@ class Guardian:
             return False
 
         if relative.startswith(".aah/runs/"):
+            task_path = self._is_task_artifact(relative)
+            if normalized in self.TASK_ONLY_RUN_ROLES and not task_path:
+                return False
+            if normalized in self.ROOT_ONLY_RUN_ROLES and task_path:
+                return False
             basename = Path(relative).name
             if basename in self.RUNTIME_OWNED_BASENAMES:
                 return False
@@ -199,8 +216,6 @@ class Guardian:
             allowed = self.ROLE_RUN_WRITES.get(normalized or "", set())
             if basename in all_owned:
                 return basename in allowed
-            # Coordination directories are not scratch space. Unknown files must
-            # go under product workspace or be added explicitly to the contract.
             return False
 
         if normalized in self.ARTIFACT_ONLY_ROLES:
