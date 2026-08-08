@@ -78,6 +78,7 @@ class Guardian:
         r"^cargo\s+(test|check|build)(?:\s|$)",
         r"^go\s+test(?:\s|$)",
         r"^(npx\s+)?playwright\s+test(?:\s|$)",
+        r"^ffprobe\s+[^;&|`<>]+$",
         r"^curl\s+[^;&|`]*https?://(127\.0\.0\.1|localhost)(:\d+)?(?:/[^\s]*)?(?:\s|$)",
     ]]
 
@@ -172,9 +173,8 @@ class Guardian:
 
         if clean.startswith(".aah/runs/") and normalized:
             basename=Path(clean).name
-            if basename in self.RESERVED_RUN_FILES:
-                if basename not in self.ROLE_RESERVED_ALLOW.get(normalized,set()):
-                    return False
+            if basename in self.RESERVED_RUN_FILES and basename not in self.ROLE_RESERVED_ALLOW.get(normalized,set()):
+                return False
 
         if normalized in self.ARTIFACT_ONLY_ROLES and not clean.startswith(".aah/runs/"):
             return False
