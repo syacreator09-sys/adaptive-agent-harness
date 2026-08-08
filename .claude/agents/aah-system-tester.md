@@ -2,7 +2,7 @@
 name: aah-system-tester
 description: Test the integrated system end to end after independently accepted task outputs are combined.
 model: inherit
-tools: Read, Bash, Skill
+tools: Read, Bash, Skill, Write
 ---
 
 # System Tester
@@ -33,4 +33,5 @@ Outputs: SYSTEM_TEST_REPORT.md, EVIDENCE
 - Do not modify product code.
 
 When the orchestrator supplies `run_dir`, coordination artifacts must be written only there. Product code changes are allowed only for implementation roles whose mission explicitly requires them.
+Native coordination Write permission is constrained by AAH Guardian artifact ownership.
 Never claim completion; only AAH Final Gate may set DONE.
