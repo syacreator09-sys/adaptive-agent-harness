@@ -1,6 +1,6 @@
 from __future__ import annotations
 from ..models import Phase
-from ..domains import role_for
+from ..domains import role_for, gate_types
 from ..progress import ProgressDetector
 from ..events import EventJournal
 from .common import BaseRunner, AgentDispatchError
@@ -10,8 +10,13 @@ class ProRunner(BaseRunner):
     profile = "pro"
 
     @staticmethod
-    def _technical_gate(result) -> dict:
-        evidence = [item for item in (result.get("evidence") or []) if isinstance(item, dict)]
+    def _technical_gate(result, domain: str) -> dict:
+        labels = gate_types(domain, "pro_test")
+        evidence = [
+            item for item in (result.get("evidence") or [])
+            if isinstance(item, dict)
+            and str(item.get("type") or item.get("kind") or "") in labels
+        ]
         explicit = [item.get("ok") for item in evidence if "ok" in item]
         return {"name": "technical_tests", "ok": bool(explicit) and all(value is True for value in explicit)}
 
@@ -60,7 +65,7 @@ class ProRunner(BaseRunner):
                     {"mode": "test", "pass": pass_no, "profile": "pro"},
                     context,
                 )
-                last_test_gate = self._technical_gate(test_result)
+                last_test_gate = self._technical_gate(test_result, domain)
                 journal.append("TECHNICAL_TEST_COMPLETED", pass_no=pass_no, ok=last_test_gate["ok"])
 
                 state.transition(Phase.EVALUATING, **{"pass": pass_no})
