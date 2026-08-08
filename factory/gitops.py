@@ -40,12 +40,7 @@ class GitCheckpoints:
         }
 
     def planning_checkpoint(self, run_id: str) -> dict[str, Any]:
-        """Create a planning boundary without accidentally committing user changes.
-
-        If Git is clean, an empty commit gives the same durable before-build boundary
-        that a spec commit provides. If the repo was already dirty, AAH records the
-        current HEAD only and never sweeps unrelated user edits into a commit.
-        """
+        """Create a durable pre-build boundary without committing user changes."""
         before = self.snapshot()
         if not before.get("is_repo"):
             return {"created": False, "reason": "not_git_repo", "head": None}
@@ -60,12 +55,27 @@ class GitCheckpoints:
                 "detail": (commit.stderr or commit.stdout).strip()[:500],
                 "head": before.get("head"),
             }
-        return {"created": True, "reason": "sealed", "head": after.get("head"), "previous_head": before.get("head")}
+        return {
+            "created": True,
+            "reason": "sealed",
+            "head": after.get("head"),
+            "previous_head": before.get("head"),
+        }
 
-    def has_finding_commit(self, finding_id: str, max_commits: int = 200) -> bool:
+    def has_finding_commit(
+        self,
+        finding_id: str,
+        since: str | None = None,
+        max_commits: int = 200,
+    ) -> bool:
         if not self.is_repo() or not finding_id:
             return False
-        result = self._run("log", f"-n{max_commits}", "--format=%s")
+        args = ["log", f"-n{max_commits}", "--format=%s"]
+        if since:
+            check = self._run("cat-file", "-e", f"{since}^{{commit}}")
+            if check.returncode == 0:
+                args.append(f"{since}..HEAD")
+        result = self._run(*args)
         if result.returncode != 0:
             return False
         needle = str(finding_id).lower()
