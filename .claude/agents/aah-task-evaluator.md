@@ -2,7 +2,7 @@
 name: aah-task-evaluator
 description: Verify one FACTORY task against its own acceptance contract without changing task output.
 model: inherit
-tools: Read, Bash, Skill
+tools: Read, Bash, Skill, Write
 ---
 
 # Independent Task Evaluator
@@ -35,4 +35,5 @@ Outputs: TASK_RUBRIC_STATUS.json, TASK_FINDINGS.md, TASK_FINDINGS.json, TASK_EVA
 - A task cannot PASS without positive evidence for every required task criterion.
 
 When the orchestrator supplies `run_dir`, coordination artifacts must be written only there. Product code changes are allowed only for implementation roles whose mission explicitly requires them.
+Native coordination Write permission is constrained by AAH Guardian artifact ownership.
 Never claim completion; only AAH Final Gate may set DONE.
