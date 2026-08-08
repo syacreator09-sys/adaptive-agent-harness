@@ -1,65 +1,111 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
+from factory.contracts import seal_contract
 from factory.final_gate import FinalGate
 from factory.evidence import EvidenceStore
 
+
+def sealed_run(path: Path):
+    (path / "SPEC.md").write_text("# SPEC\n\nBuild X\n", encoding="utf-8")
+    (path / "RUBRIC.json").write_text(json.dumps({"criteria": [
+        {"id": "R-1", "criterion": "X works", "required": True}
+    ]}), encoding="utf-8")
+    seal_contract(path)
+
+
+def status(path: Path, value: str, evidence):
+    (path / "RUBRIC_STATUS.json").write_text(json.dumps({"criteria": [
+        {"id": "R-1", "status": value, "evidence": evidence}
+    ]}), encoding="utf-8")
+
+
 class FinalGateTests(unittest.TestCase):
+    def test_unsealed_run_never_passes(self):
+        with tempfile.TemporaryDirectory() as td:
+            result = FinalGate(Path(td)).evaluate([], [])
+            self.assertFalse(result["done"])
+            self.assertIn("contract:missing", result["failures"])
+
     def test_unverified_never_passes(self):
         with tempfile.TemporaryDirectory() as td:
-            run = Path(td)
-            ev = EvidenceStore(run)
-            ev.append({"id":"E-1","kind":"test","ok":True,"detail":"ok"})
-            rubric = [{"id":"R-1","status":"UNVERIFIED","required":True,"evidence":["E-1"]}]
-            result = FinalGate(run).evaluate(rubric, findings=[])
-            self.assertFalse(result["done"])
-
-    def test_pass_requires_real_evidence_and_no_major_findings(self):
-        with tempfile.TemporaryDirectory() as td:
-            run = Path(td)
-            ev = EvidenceStore(run)
-            ev.append({"id":"E-1","kind":"test","ok":True,"detail":"ok"})
-            rubric = [{"id":"R-1","status":"PASS","required":True,"evidence":["E-1"]}]
-            result = FinalGate(run).evaluate(rubric, findings=[])
-            self.assertTrue(result["done"])
-            result2 = FinalGate(run).evaluate(rubric, findings=[{"id":"F-1","severity":"major","status":"open"}])
-            self.assertFalse(result2["done"])
-
-    def test_rubric_wrapped_in_criteria_dict_does_not_crash(self):
-        """Real bug found live (plan AUTONOMÍA TOTAL, 2026-08-07,
-        RUN-20260807-004): a real evaluator wrote RUBRIC.json as
-        {"criteria": [...]} instead of a bare list -- `for item in rubric`
-        iterated the dict's string keys and crashed with AttributeError
-        on item.get(...), killing the whole run before FINAL_REPORT was
-        ever written."""
-        with tempfile.TemporaryDirectory() as td:
-            run = Path(td)
-            ev = EvidenceStore(run)
-            ev.append({"id":"E-1","kind":"test","ok":True,"detail":"ok"})
-            rubric = {"criteria": [{"id":"R-1","status":"PASS","required":True,"evidence":["E-1"]}], "overall_verdict":"PASS"}
-            result = FinalGate(run).evaluate(rubric, findings=[])
-            self.assertTrue(result["done"])
-
-    def test_non_dict_rubric_item_is_unverified_not_a_crash(self):
-        with tempfile.TemporaryDirectory() as td:
-            run = Path(td)
-            result = FinalGate(run).evaluate(["R-1"], findings=[])
+            run = Path(td); sealed_run(run)
+            EvidenceStore(run).append({"id": "E-1", "type": "test", "ok": True})
+            status(run, "UNVERIFIED", ["E-1"])
+            result = FinalGate(run).evaluate(None, [])
             self.assertFalse(result["done"])
             self.assertIn("R-1:status=UNVERIFIED", result["failures"])
 
-    def test_evidence_ref_key_and_type_based_reference_are_admissible(self):
-        """A real evaluator referenced evidence by its record "type"
-        (e.g. "unittest_run") under the key "evidence_ref", not by the
-        EvidenceStore's own auto-derived "id" under "evidence" -- neither
-        agents.py nor the .claude/agents/*.md contracts pin the exact
-        field name or reference scheme, and the type-based reference
-        does resolve to a real, admissible EVIDENCE.jsonl record."""
+    def test_pass_requires_explicit_positive_evidence(self):
         with tempfile.TemporaryDirectory() as td:
-            run = Path(td)
-            ev = EvidenceStore(run)
-            ev.append({"kind":"test","type":"unittest_run","detail":"OK"})
-            rubric = [{"id":"R-1","status":"PASS","required":True,"evidence_ref":["unittest_run"]}]
-            result = FinalGate(run).evaluate(rubric, findings=[])
+            run = Path(td); sealed_run(run)
+            EvidenceStore(run).append({"id": "E-1", "type": "test", "ok": True, "detail": "executed"})
+            status(run, "PASS", ["E-1"])
+            result = FinalGate(run).evaluate(None, [])
             self.assertTrue(result["done"])
+            self.assertEqual(result["passed"], 1)
 
-if __name__ == "__main__": unittest.main()
+    def test_narrative_evidence_without_ok_cannot_support_pass(self):
+        with tempfile.TemporaryDirectory() as td:
+            run = Path(td); sealed_run(run)
+            EvidenceStore(run).append({"id": "E-1", "type": "test", "detail": "looks good"})
+            status(run, "PASS", ["E-1"])
+            result = FinalGate(run).evaluate(None, [])
+            self.assertFalse(result["done"])
+            self.assertEqual(result["passed"], 0)
+            self.assertIn("R-1:unverified_evidence:E-1", result["failures"])
+
+    def test_negative_evidence_blocks_even_if_same_reference_has_positive_record(self):
+        with tempfile.TemporaryDirectory() as td:
+            run = Path(td); sealed_run(run)
+            store = EvidenceStore(run)
+            store.append({"id": "E-shared", "type": "test", "ok": True})
+            store.append({"id": "E-shared", "type": "test", "ok": False})
+            status(run, "PASS", ["E-shared"])
+            result = FinalGate(run).evaluate(None, [])
+            self.assertFalse(result["done"])
+            self.assertIn("R-1:failed_evidence:E-shared", result["failures"])
+
+    def test_type_reference_is_valid_only_when_explicitly_positive(self):
+        with tempfile.TemporaryDirectory() as td:
+            run = Path(td); sealed_run(run)
+            EvidenceStore(run).append({"id": "E-1", "type": "unittest_run", "ok": True})
+            (run / "RUBRIC_STATUS.json").write_text(json.dumps({"criteria": [
+                {"id": "R-1", "status": "PASS", "evidence_ref": ["unittest_run"]}
+            ]}), encoding="utf-8")
+            self.assertTrue(FinalGate(run).evaluate(None, [])["done"])
+
+    def test_open_major_finding_blocks_pass(self):
+        with tempfile.TemporaryDirectory() as td:
+            run = Path(td); sealed_run(run)
+            EvidenceStore(run).append({"id": "E-1", "type": "test", "ok": True})
+            status(run, "PASS", ["E-1"])
+            result = FinalGate(run).evaluate(None, [
+                {"id": "F-1", "severity": "major", "status": "open"}
+            ])
+            self.assertFalse(result["done"])
+            self.assertIn("F-1:open_major", result["failures"])
+
+    def test_contract_tampering_blocks_pass(self):
+        with tempfile.TemporaryDirectory() as td:
+            run = Path(td); sealed_run(run)
+            EvidenceStore(run).append({"id": "E-1", "type": "test", "ok": True})
+            status(run, "PASS", ["E-1"])
+            (run / "SPEC.md").write_text("# changed after seal\n", encoding="utf-8")
+            result = FinalGate(run).evaluate(None, [])
+            self.assertFalse(result["done"])
+            self.assertIn("contract:spec_hash_mismatch", result["failures"])
+
+    def test_corrupt_evidence_jsonl_fails_closed(self):
+        with tempfile.TemporaryDirectory() as td:
+            run = Path(td); sealed_run(run)
+            (run / "EVIDENCE.jsonl").write_text("{not json}\n", encoding="utf-8")
+            status(run, "PASS", ["E-1"])
+            result = FinalGate(run).evaluate(None, [])
+            self.assertFalse(result["done"])
+            self.assertIn("evidence:invalid_jsonl", result["failures"])
+
+
+if __name__ == "__main__":
+    unittest.main()
