@@ -2,11 +2,14 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-TARGET="${1:-$PWD}"
-TARGET="$(cd "$TARGET" 2>/dev/null && pwd -P || true)"
+TARGET_RAW="${1:-$PWD}"
+if [ ! -e "$TARGET_RAW" ]; then
+  mkdir -p "$TARGET_RAW"
+fi
+TARGET="$(cd "$TARGET_RAW" 2>/dev/null && pwd -P || true)"
 
 if [ -z "$TARGET" ] || [ ! -d "$TARGET" ]; then
-  echo "AAH: target directory does not exist" >&2
+  echo "AAH: target path is not a directory" >&2
   exit 2
 fi
 
@@ -30,7 +33,7 @@ RUNTIME="$AAH/runtime"
 BIN="$AAH/bin"
 mkdir -p "$AAH" "$BIN"
 
-# Runtime is copied into the project so the source clone is not required afterward.
+# Atomic-ish runtime replacement: stage the complete runtime first, then swap.
 rm -rf "$RUNTIME.new"
 mkdir -p "$RUNTIME.new"
 cp -R "$ROOT/factory" "$RUNTIME.new/factory"
@@ -55,37 +58,31 @@ exec "$PY" -m factory.hook_guardian
 WRAP
 chmod +x "$BIN/guardian-hook"
 
-# Initialize Git only for a project that does not already have it, mirroring LITE's checkpoint philosophy.
+cat > "$BIN/tool-adapter" <<WRAP
+#!/usr/bin/env bash
+set -euo pipefail
+export PYTHONPATH="$RUNTIME:\${PYTHONPATH:-}"
+exec "$PY" -m factory.tool_adapter_cli "\$@"
+WRAP
+chmod +x "$BIN/tool-adapter"
+
+# Git provides LITE's durable checkpoint/memory boundary. Never add existing
+# user files to a commit here; initialize only when the target has no repo.
 if command -v git >/dev/null 2>&1 && [ "${AAH_NO_GIT_INIT:-0}" != "1" ]; then
   if ! git -C "$TARGET" rev-parse --git-dir >/dev/null 2>&1; then
     git -C "$TARGET" init -q || true
   fi
 fi
 
-# Install Claude Code bridge with unique AAH-prefixed names; existing unrelated agents/skills remain untouched.
+# Claude Code bridge: overwrite only AAH-owned agent/skill names. Unrelated
+# project agents, skills and CLAUDE.md remain untouched.
 mkdir -p "$TARGET/.claude/skills/aah" "$TARGET/.claude/agents"
 cp "$ROOT/.claude/skills/aah/SKILL.md" "$TARGET/.claude/skills/aah/SKILL.md"
-PYTHONPATH="$RUNTIME" "$PY" - "$TARGET" <<'PY'
-from pathlib import Path
-import sys
-from factory.agents import AgentRegistry
-target=Path(sys.argv[1]); out=target/'.claude'/'agents'; out.mkdir(parents=True,exist_ok=True)
-map_tools={'read':'Read','glob':'Glob','grep':'Grep','edit':'Edit','write':'Write','shell':'Bash','browser':'Skill'}
-roles=['planner','architect','builder','tester','evaluator','fixer','worker','task_evaluator','integrator','system_tester','security_reviewer','final_reviewer']
-reg=AgentRegistry()
-for role in roles:
-    a=reg.get(role); tools=[]
-    for t in a['tools']:
-        if t in map_tools and map_tools[t] not in tools: tools.append(map_tools[t])
-    lines=['---',f'name: aah-{role.replace("_","-")}',f'description: {a["mission"]}','model: inherit']
-    if tools: lines.append('tools: '+', '.join(tools))
-    lines += ['---','',f'# {a["identity"]}','',a['mission'],'','## Contract','',f'Inputs: {", ".join(a["inputs"])}',f'Outputs: {", ".join(a["outputs"])}','','## Rules','']
-    lines += [f'- {rule}' for rule in a['rules']]
-    lines += ['','When the orchestrator supplies `run_dir`, coordination artifacts must be written only there. Product code changes are allowed only for roles whose mission explicitly requires implementation.']
-    (out/f'aah-{role.replace("_","-")}.md').write_text('\n'.join(lines)+'\n',encoding='utf-8')
-PY
+PYTHONPATH="$RUNTIME" "$PY" -m factory.agent_renderer "$TARGET/.claude/agents"
 
-# Install an idempotent Claude PreToolUse enforcement hook without replacing existing project hooks.
+# Install an idempotent PreToolUse hook without replacing existing hooks. If
+# settings are malformed, preserve them byte-for-byte and warn rather than
+# guessing a repair.
 "$PY" - "$TARGET" <<'PY'
 from pathlib import Path
 import json, sys
@@ -93,31 +90,29 @@ root=Path(sys.argv[1]); p=root/'.claude'/'settings.local.json'; p.parent.mkdir(p
 try:
     data=json.loads(p.read_text(encoding='utf-8')) if p.exists() else {}
 except Exception:
-    # Never destroy an unparseable user settings file. External AAH still works; native Guardian hook is skipped.
-    print(f"AAH warning: preserving unparseable {p}; Guardian hook was not installed there", file=sys.stderr)
+    print(f"AAH warning: preserving unparseable {p}; native Guardian hook was not installed", file=sys.stderr)
     raise SystemExit(0)
 hooks=data.setdefault('hooks',{}).setdefault('PreToolUse',[])
 entry={
-  'matcher':'Bash|Read|Write|Edit|NotebookEdit',
+  'matcher':'Bash|Read|Write|Edit|NotebookEdit|Grep|Glob',
   'hooks':[{'type':'command','command':'.aah/bin/guardian-hook','timeout':10,'statusMessage':'AAH Guardian'}]
 }
-def is_aah(x):
-    return any(isinstance(h,dict) and h.get('command')=='.aah/bin/guardian-hook' for h in (x.get('hooks') or [])) if isinstance(x,dict) else False
-hooks[:]=[x for x in hooks if not is_aah(x)] + [entry]
+def is_aah(value):
+    return any(isinstance(h,dict) and h.get('command')=='.aah/bin/guardian-hook' for h in (value.get('hooks') or [])) if isinstance(value,dict) else False
+hooks[:]=[value for value in hooks if not is_aah(value)] + [entry]
 p.write_text(json.dumps(data,indent=2)+'\n',encoding='utf-8')
 PY
 
-# Add a small idempotent Codex/agent guidance block without replacing an existing AGENTS.md.
+# Add/update only the marked AAH block in AGENTS.md. Existing project guidance
+# stays before/after it. MCP credentials/configuration are never copied here.
 "$PY" - "$TARGET" <<'PY'
 from pathlib import Path
 import sys
-root=Path(sys.argv[1])
-p=root/'AGENTS.md'
-start='<!-- AAH:START -->'
-end='<!-- AAH:END -->'
+root=Path(sys.argv[1]); p=root/'AGENTS.md'
+start='<!-- AAH:START -->'; end='<!-- AAH:END -->'
 block='''<!-- AAH:START -->
 ## Adaptive Agent Harness
-When a task is explicitly assigned to AAH, inspect `.aah/project.json` and use the AAH protocol: producer and evaluator are independent, evidence is required, and Final Gate decides completion. From an external shell use `.aah/bin/factory run "<goal>" --profile auto`. Do not bypass AAH Guardian or expose `.env` values.
+When work is explicitly assigned to AAH, use its sealed-artifact protocol: fresh independent producer/evaluator brains, persistent SPEC/RUBRIC/FINDINGS/EVIDENCE, and deterministic Final Gate. External runs use `.aah/bin/factory run "<goal>" --profile auto`; native Claude Code uses `/aah`. Never expose `.env` values, bypass AAH Guardian, or treat another agent's conclusion as verification. MCP servers remain user/project managed and must be selected only when the task requires them.
 <!-- AAH:END -->'''
 text=p.read_text(encoding='utf-8') if p.exists() else ''
 if start in text and end in text:
@@ -128,6 +123,7 @@ else:
 p.write_text(text,encoding='utf-8')
 PY
 
+# Detect project/provider/tool/MCP capabilities and write only safe metadata.
 "$BIN/factory" setup --target "$TARGET" --non-interactive >/dev/null
 
 cat <<MSG
@@ -138,14 +134,18 @@ Adaptive Agent Harness installed in:
 Runtime:
   $BIN/factory
 
-Next:
+Check:
   $BIN/factory doctor --target "$TARGET"
 
 Claude Code:
   open Claude Code in the project and run /aah
 
-External/Hermes:
+External / Hermes / scripts:
   $BIN/factory run "your goal" --target "$TARGET" --profile auto
 
-No GitHub Actions were installed. API keys are not required.
+Local adapters (optional):
+  AAH_TOOL_WEB / AAH_TOOL_IMAGE / AAH_TOOL_VIDEO / AAH_TOOL_VOICE
+  are invoked through $BIN/tool-adapter and their command values are not persisted.
+
+No GitHub Actions were installed. API keys are not required or used by default.
 MSG
