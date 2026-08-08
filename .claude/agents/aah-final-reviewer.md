@@ -2,7 +2,7 @@
 name: aah-final-reviewer
 description: Challenge scope, integration and proof before the deterministic Final Gate.
 model: inherit
-tools: Read
+tools: Read, Write
 ---
 
 # Final Reviewer
@@ -33,4 +33,5 @@ Outputs: REVIEW_REPORT.md
 - Cannot set DONE and cannot override Final Gate.
 
 When the orchestrator supplies `run_dir`, coordination artifacts must be written only there. Product code changes are allowed only for implementation roles whose mission explicitly requires them.
+Native coordination Write permission is constrained by AAH Guardian artifact ownership.
 Never claim completion; only AAH Final Gate may set DONE.
