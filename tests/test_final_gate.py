@@ -37,7 +37,7 @@ class FinalGateTests(unittest.TestCase):
             self.assertFalse(result["done"])
             self.assertIn("R-1:status=UNVERIFIED", result["failures"])
 
-    def test_pass_requires_explicit_positive_evidence(self):
+    def test_pass_requires_explicit_positive_evidence_id(self):
         with tempfile.TemporaryDirectory() as td:
             run = Path(td); sealed_run(run)
             EvidenceStore(run).append({"id": "E-1", "type": "test", "ok": True, "detail": "executed"})
@@ -56,7 +56,7 @@ class FinalGateTests(unittest.TestCase):
             self.assertEqual(result["passed"], 0)
             self.assertIn("R-1:unverified_evidence:E-1", result["failures"])
 
-    def test_negative_evidence_blocks_even_if_same_reference_has_positive_record(self):
+    def test_duplicate_evidence_id_is_ambiguous_and_blocks_pass(self):
         with tempfile.TemporaryDirectory() as td:
             run = Path(td); sealed_run(run)
             store = EvidenceStore(run)
@@ -65,16 +65,41 @@ class FinalGateTests(unittest.TestCase):
             status(run, "PASS", ["E-shared"])
             result = FinalGate(run).evaluate(None, [])
             self.assertFalse(result["done"])
-            self.assertIn("R-1:failed_evidence:E-shared", result["failures"])
+            self.assertIn("evidence:duplicate_id:E-shared", result["failures"])
+            self.assertIn("R-1:ambiguous_evidence:E-shared", result["failures"])
 
-    def test_type_reference_is_valid_only_when_explicitly_positive(self):
+    def test_semantic_type_cannot_substitute_for_stable_evidence_id(self):
         with tempfile.TemporaryDirectory() as td:
             run = Path(td); sealed_run(run)
             EvidenceStore(run).append({"id": "E-1", "type": "unittest_run", "ok": True})
+            status(run, "PASS", ["unittest_run"])
+            result = FinalGate(run).evaluate(None, [])
+            self.assertFalse(result["done"])
+            self.assertIn("R-1:invalid_evidence:unittest_run", result["failures"])
+
+    def test_duplicate_status_id_is_rejected_instead_of_last_write_winning(self):
+        with tempfile.TemporaryDirectory() as td:
+            run = Path(td); sealed_run(run)
+            EvidenceStore(run).append({"id": "E-1", "type": "test", "ok": True})
             (run / "RUBRIC_STATUS.json").write_text(json.dumps({"criteria": [
-                {"id": "R-1", "status": "PASS", "evidence_ref": ["unittest_run"]}
+                {"id": "R-1", "status": "FAIL", "evidence": []},
+                {"id": "R-1", "status": "PASS", "evidence": ["E-1"]},
             ]}), encoding="utf-8")
-            self.assertTrue(FinalGate(run).evaluate(None, [])["done"])
+            result = FinalGate(run).evaluate(None, [])
+            self.assertFalse(result["done"])
+            self.assertIn("status:duplicate_id:R-1", result["failures"])
+
+    def test_unknown_status_id_is_rejected(self):
+        with tempfile.TemporaryDirectory() as td:
+            run = Path(td); sealed_run(run)
+            EvidenceStore(run).append({"id": "E-1", "type": "test", "ok": True})
+            (run / "RUBRIC_STATUS.json").write_text(json.dumps({"criteria": [
+                {"id": "R-1", "status": "PASS", "evidence": ["E-1"]},
+                {"id": "R-INVENTED", "status": "PASS", "evidence": ["E-1"]},
+            ]}), encoding="utf-8")
+            result = FinalGate(run).evaluate(None, [])
+            self.assertFalse(result["done"])
+            self.assertIn("status:unknown_id:R-INVENTED", result["failures"])
 
     def test_open_major_finding_blocks_pass(self):
         with tempfile.TemporaryDirectory() as td:
