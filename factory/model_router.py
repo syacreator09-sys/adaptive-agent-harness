@@ -23,38 +23,38 @@ class ModelPlan:
         }
 
 
-# These are preference orders, not assumptions that every account exposes every
-# model. Provider adapters may fall back only when the CLI reports a model/access
-# selection error; arbitrary runtime failures are never replayed on another model.
+# Preference orders, not availability claims. AAH falls back only on explicit
+# model-selection/access errors. Claude Code's own /model remains source of truth
+# for a given account; the ids below are current documented choices.
 _CLAUDE: dict[str, dict[str, tuple[str, ...]]] = {
     "quality": {
-        "deep_reasoning": ("claude-opus-5", "claude-opus-4-8", "claude-sonnet-5"),
-        "strong_coding": ("claude-opus-5", "claude-opus-4-8", "claude-sonnet-5"),
-        "architecture_high": ("claude-opus-5", "claude-opus-4-8", "claude-sonnet-5"),
-        "independent_review": ("claude-sonnet-5", "claude-opus-5", "claude-opus-4-8"),
+        "deep_reasoning": ("claude-opus-4-8", "claude-sonnet-5"),
+        "strong_coding": ("claude-opus-4-8", "claude-sonnet-5"),
+        "architecture_high": ("claude-opus-4-8", "claude-sonnet-5"),
+        "independent_review": ("claude-sonnet-5", "claude-opus-4-8"),
         "fast_verification": ("claude-sonnet-5", "claude-opus-4-8"),
-        "security_review": ("claude-opus-5", "claude-sonnet-5", "claude-opus-4-8"),
-        "integration_high": ("claude-opus-5", "claude-sonnet-5", "claude-opus-4-8"),
+        "security_review": ("claude-opus-4-8", "claude-sonnet-5"),
+        "integration_high": ("claude-opus-4-8", "claude-sonnet-5"),
     },
     "balanced": {
-        # Keep LITE's producer side strong, while verification uses a different
-        # model family when possible, mirroring the writer/verifier separation.
-        "deep_reasoning": ("claude-opus-5", "claude-opus-4-8", "claude-sonnet-5"),
-        "strong_coding": ("claude-opus-5", "claude-sonnet-5", "claude-opus-4-8"),
-        "architecture_high": ("claude-opus-5", "claude-sonnet-5", "claude-opus-4-8"),
-        "independent_review": ("claude-sonnet-5", "claude-opus-5", "claude-opus-4-8"),
+        # LITE intentionally mirrors the proven split: high-reasoning producer
+        # side, then a fresh Sonnet-family evaluator.
+        "deep_reasoning": ("claude-opus-4-8", "claude-sonnet-5"),
+        "strong_coding": ("claude-opus-4-8", "claude-sonnet-5"),
+        "architecture_high": ("claude-opus-4-8", "claude-sonnet-5"),
+        "independent_review": ("claude-sonnet-5", "claude-opus-4-8"),
         "fast_verification": ("claude-sonnet-5", "claude-opus-4-8"),
-        "security_review": ("claude-opus-5", "claude-sonnet-5"),
-        "integration_high": ("claude-opus-5", "claude-sonnet-5"),
+        "security_review": ("claude-opus-4-8", "claude-sonnet-5"),
+        "integration_high": ("claude-opus-4-8", "claude-sonnet-5"),
     },
     "economy": {
-        "deep_reasoning": ("claude-sonnet-5", "claude-opus-5", "claude-opus-4-8"),
-        "strong_coding": ("claude-sonnet-5", "claude-opus-5", "claude-opus-4-8"),
-        "architecture_high": ("claude-sonnet-5", "claude-opus-5"),
-        "independent_review": ("claude-sonnet-5", "claude-opus-4-8"),
+        "deep_reasoning": ("claude-sonnet-5", "claude-opus-4-8"),
+        "strong_coding": ("claude-sonnet-5", "claude-opus-4-8"),
+        "architecture_high": ("claude-sonnet-5", "claude-opus-4-8"),
+        "independent_review": ("claude-sonnet-5",),
         "fast_verification": ("claude-sonnet-5",),
-        "security_review": ("claude-sonnet-5", "claude-opus-5"),
-        "integration_high": ("claude-sonnet-5", "claude-opus-5"),
+        "security_review": ("claude-sonnet-5", "claude-opus-4-8"),
+        "integration_high": ("claude-sonnet-5", "claude-opus-4-8"),
     },
 }
 
@@ -63,7 +63,6 @@ _OPENAI: dict[str, dict[str, tuple[str, ...]]] = {
         "deep_reasoning": ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"),
         "strong_coding": ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"),
         "architecture_high": ("gpt-5.6-sol", "gpt-5.6-terra"),
-        # Prefer a distinct verifier tier when the producer also used Sol.
         "independent_review": ("gpt-5.6-terra", "gpt-5.6-sol", "gpt-5.6-luna"),
         "fast_verification": ("gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6-sol"),
         "security_review": ("gpt-5.6-sol", "gpt-5.6-terra"),
@@ -101,12 +100,7 @@ _EFFORT = {
 
 
 class ModelRouter:
-    """Resolve role capabilities to model preference lists.
-
-    The runtime talks in capabilities, not vendor model names. This keeps agent
-    identities stable when providers add/retire models and lets local overrides
-    replace any recommendation without changing profile logic.
-    """
+    """Resolve stable agent capabilities to provider-specific model preferences."""
 
     @staticmethod
     def resolve(provider: str, capability: str, policy: str = "balanced") -> ModelPlan:
