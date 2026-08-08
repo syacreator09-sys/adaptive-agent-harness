@@ -5,6 +5,7 @@ from typing import Any
 BASE_RULES=[
     "Coordinate only through declared artifacts and the orchestrator.",
     "Never claim PASS without admissible evidence.",
+    "Evidence that supports PASS must contain an explicit ok:true result and a stable id or type reference.",
     "Do not expose secrets or copy environment values into artifacts.",
     "Respect the existing project's instructions and structure unless the SPEC explicitly changes them.",
 ]
@@ -32,15 +33,15 @@ BUILTIN_AGENTS: dict[str,dict[str,Any]]={
  "fixer":A("Finding Fixer","Repair only explicit open findings in severity order.","strong_coding",["read","edit","write","shell","git"],["SPEC","FINDINGS","PROJECT_MANIFEST"],["product_code","fix_summary"],["Never broaden scope or refactor unrelated code."]),
  "worker":A("Factory Worker","Complete one bounded task from the task graph and its acceptance criteria.","strong_coding",["read","edit","write","shell","git"],["TASK","SPEC","ARCHITECTURE","PROJECT_MANIFEST"],["task_changes","task_summary"],["Touch only the task's declared scope."]),
  "integrator":A("Integration Engineer","Integrate completed task outputs without silently changing task contracts.","strong_coding",["read","edit","write","shell","git"],["TASKS","ARCHITECTURE","task_outputs"],["integrated_product","integration_summary"],["Do not waive failed task acceptance criteria."]),
- "task_evaluator":A("Independent Task Evaluator","Verify one FACTORY task against its acceptance criteria without changing the task output.","independent_review",["read","shell","browser"],["TASK","task_changes","task_evidence"],["task_result","EVIDENCE"],["Must not modify product code.","Return task_result.status as PASS, FAIL, or UNVERIFIED."]),
+ "task_evaluator":A("Independent Task Evaluator","Verify one FACTORY task against its acceptance criteria without changing the task output.","independent_review",["read","shell","browser"],["TASK","task_changes","task_evidence"],["task_result","EVIDENCE"],["Must not modify product code.","Return task_result.status as PASS, FAIL, or UNVERIFIED.","A PASS task_result must include explicit positive verification evidence."]),
  "system_tester":A("System Tester","Test the integrated system end to end.","independent_review",["read","shell","browser"],["SPEC","RUBRIC","integrated_product"],["EVIDENCE"],["Do not modify product code."]),
  "security_reviewer":A("Security Reviewer","Review the resulting change for secrets, unsafe dependencies, trust-boundary and common security regressions.","security_review",["read","shell"],["SPEC","diff","PROJECT_MANIFEST"],["EVIDENCE","security_findings"],["Do not modify product code during review."]),
  "final_reviewer":A("Final Reviewer","Challenge completion, scope and integration before deterministic Final Gate.","independent_review",["read"],["SPEC","RUBRIC","FINDINGS","EVIDENCE"],["review_summary"],["Cannot set DONE and cannot override Final Gate."]),
  "content_strategist":A("Content Strategist","Turn a content goal into production criteria and variants.","deep_reasoning",["read","web"],["REQUEST","PROJECT_MANIFEST"],["SPEC.md","RUBRIC.json"]),
  "content_producer":A("Content Producer","Produce the requested content artifacts using only capabilities actually connected on this machine.","strong_coding",["image","video","voice","ffmpeg","write","shell"],["SPEC"],["artifacts"],["Do not claim a media artifact exists if the required media adapter is unavailable."]),
- "content_evaluator":A("Independent Content Evaluator","Verify content against measurable platform, brand, factual and production criteria.","independent_review",["read","files","media_probe","web","shell"],["SPEC","RUBRIC","content_artifacts"],["RUBRIC.json","FINDINGS.json","EVIDENCE"],["Must not modify the produced content during evaluation."]),
+ "content_evaluator":A("Independent Content Evaluator","Verify content against measurable platform, brand, factual and production criteria.","independent_review",["read","files","media_probe","web","shell"],["SPEC","RUBRIC","content_artifacts"],["RUBRIC.json","FINDINGS.json","EVIDENCE","task_result"],["Must not modify the produced content during evaluation.","When mode is task_evaluate, return task_result.status as PASS, FAIL, or UNVERIFIED."]),
  "researcher":A("Researcher","Collect source-grounded evidence for a bounded research question.","deep_reasoning",["web","files"],["SPEC"],["EVIDENCE"],["Do not fabricate sources when web access is unavailable."],["web"]),
- "fact_checker":A("Independent Fact Checker","Verify claims against sources, recency, contradictions and citation support.","independent_review",["web","files"],["SPEC","RUBRIC","EVIDENCE"],["RUBRIC.json","FINDINGS.json","EVIDENCE"],["Do not rewrite the research while evaluating it.","Do not approve claims without source access."],["web"]),
+ "fact_checker":A("Independent Fact Checker","Verify claims against sources, recency, contradictions and citation support.","independent_review",["web","files"],["SPEC","RUBRIC","EVIDENCE"],["RUBRIC.json","FINDINGS.json","EVIDENCE","task_result"],["Do not rewrite the research while evaluating it.","Do not approve claims without source access.","When mode is task_evaluate, return task_result.status as PASS, FAIL, or UNVERIFIED."],["web"]),
 }
 
 
