@@ -1,5 +1,8 @@
 from __future__ import annotations
+import re
 from typing import Any
+
+_TASK_ID_RE=re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 
 class TaskGraphError(ValueError):
@@ -25,6 +28,8 @@ class TaskGraph:
             if raw_id is None or not str(raw_id).strip():
                 raise TaskGraphError(f"task {index} is missing id")
             task_id=str(raw_id).strip()
+            if not _TASK_ID_RE.fullmatch(task_id) or ".." in task_id:
+                raise TaskGraphError(f"task {index} has unsafe id {task_id!r}")
             if task_id in self.by_id:
                 raise TaskGraphError(f"duplicate task id {task_id}")
             task["id"]=task_id
@@ -54,14 +59,10 @@ class TaskGraph:
     def order(self)->list[dict[str,Any]]:
         done=set(); ordered=[]
         while len(ordered)<len(self.tasks):
-            ready=[
-                task for task in self.tasks
-                if task["id"] not in done and all(dep in done for dep in task["depends_on"])
-            ]
+            ready=[task for task in self.tasks if task["id"] not in done and all(dep in done for dep in task["depends_on"])]
             if not ready:
                 unresolved=[task["id"] for task in self.tasks if task["id"] not in done]
                 raise TaskGraphError(f"cycle detected among tasks: {unresolved}")
             for task in ready:
-                ordered.append(task)
-                done.add(task["id"])
+                ordered.append(task); done.add(task["id"])
         return ordered
