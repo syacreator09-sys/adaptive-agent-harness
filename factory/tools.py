@@ -35,9 +35,10 @@ class ToolRegistry:
             path = shutil.which(exe)
             result[key] = {"available": bool(path), "path": path}
         for capability, env_name in cls.ADAPTER_ENV.items():
+            configured = bool(os.environ.get(env_name))
             result[f"adapter:{capability}"] = {
-                "available": bool(os.environ.get(env_name)),
-                "configured": bool(os.environ.get(env_name)),
+                "available": configured,
+                "configured": configured,
                 "env": env_name,
             }
         return result
@@ -51,15 +52,10 @@ class ToolRegistry:
     ) -> dict[str, Any]:
         discovered = discovered or cls.discover()
         selected: dict[str, str] = {}
-        adapters: dict[str, str] = {}
+        adapters: dict[str, dict[str, str]] = {}
         missing: list[str] = []
         native: list[str] = []
         provider_tools: list[str] = []
-
-        def adapter_command(capability: str) -> str | None:
-            env_name = cls.ADAPTER_ENV[capability]
-            value = os.environ.get(env_name)
-            return value if value else None
 
         for capability in requested:
             if capability in cls.CORE_NATIVE:
@@ -73,16 +69,19 @@ class ToolRegistry:
                     native.append("web")
                     provider_tools.extend(["WebSearch", "WebFetch"])
                     continue
-                command = adapter_command("web")
-                if command:
-                    adapters["web"] = command
+                env_name = cls.ADAPTER_ENV["web"]
+                if os.environ.get(env_name):
+                    adapters["web"] = {"env": env_name, "invoke": ".aah/bin/tool-adapter web"}
                 else:
                     missing.append("web")
                 continue
             if capability in {"image", "video", "voice"}:
-                command = adapter_command(capability)
-                if command:
-                    adapters[capability] = command
+                env_name = cls.ADAPTER_ENV[capability]
+                if os.environ.get(env_name):
+                    adapters[capability] = {
+                        "env": env_name,
+                        "invoke": f".aah/bin/tool-adapter {capability}",
+                    }
                 else:
                     missing.append(capability)
                 continue
@@ -101,8 +100,6 @@ class ToolRegistry:
             "native": sorted(set(native)),
             "provider_tools": sorted(set(provider_tools)),
             "selected": selected,
-            # Adapter command strings are runtime-only and must not be written to
-            # project manifests, reports, or evidence.
             "adapters": adapters,
             "missing": sorted(set(missing)),
         }
