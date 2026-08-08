@@ -26,33 +26,47 @@ class AgentExecutor:
         provider_name=assignment.get("provider")
         if provider_name in {None,"none"}:
             raise RuntimeError(f"No provider available for {role}")
-        resolution=self.tool_router.for_agent(agent,task)
-        required=set(task.get("required_tools") or [])
-        missing_required=required.intersection(resolution["missing"])
+
+        resolution=self.tool_router.for_agent(role,agent,task,provider_name,context)
+        missing_required=set(resolution.get("required") or []).intersection(resolution.get("missing") or [])
         if missing_required:
-            raise RuntimeError(f"Missing required tools for {role}: {sorted(missing_required)}")
+            raise RuntimeError(
+                f"Missing required tools for {role}: {sorted(missing_required)}. "
+                "Install/configure the capability or set an AAH_TOOL_* adapter on this machine."
+            )
+
         enriched=dict(context)
         enriched["tool_resolution"]=resolution
         provider=ProviderRegistry.build(provider_name,self.subscription_only)
         prompt=self._prompt(role,agent,task,enriched)
-        tools=self._provider_tools(resolution.get("native",[]),provider_name)
+        tools=self._provider_tools(resolution,provider_name)
         access="workspace-write" if any(x in resolution.get("native",[]) for x in ["edit","write"]) else "read-only"
         env=EnvRouter(self.subscription_only).scoped_provider_env(context.get("project",{}),role,task)
         env["AAH_GUARDIAN_MODE"]=str(context.get("guardian","guarded"))
         env["AAH_TARGET_ROOT"]=str(self.target)
         env["AAH_ROLE"]=role
-        result=provider.run(prompt,self.target,model=assignment.get("model"),tools=tools,guardian=context.get("guardian","guarded"),access=access,env=env)
+        result=provider.run(
+            prompt,
+            self.target,
+            model=assignment.get("model"),
+            tools=tools,
+            guardian=context.get("guardian","guarded"),
+            access=access,
+            env=env,
+        )
         self.calls.append({"role":role,"session":session,"provider":provider_name,"task":task,"tools":resolution})
         result.setdefault("session",session)
         result["_aah_role"]=role
         return result
 
     @staticmethod
-    def _provider_tools(tools:list[str],provider:str)->list[str]:
+    def _provider_tools(resolution:dict[str,Any],provider:str)->list[str]:
         if provider!="claude":
             return []
         mapping={"read":"Read","glob":"Glob","grep":"Grep","edit":"Edit","write":"Write","shell":"Bash"}
-        return sorted({mapping[t] for t in tools if t in mapping})
+        tools={mapping[t] for t in resolution.get("native",[]) if t in mapping}
+        tools.update(str(x) for x in resolution.get("provider_tools",[]) if x)
+        return sorted(tools)
 
     @staticmethod
     def _prompt(role,agent,task,context):
