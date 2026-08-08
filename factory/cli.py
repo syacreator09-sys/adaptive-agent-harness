@@ -11,7 +11,7 @@ from .executor import AgentExecutor
 from .artifacts import ArtifactStore
 from .profiles import LiteRunner, ProRunner, FactoryRunner
 from .orchestrator import AutoOrchestrator
-from .domains import role_for
+from .domains import role_for, gate_types
 from .final_gate import FinalGate
 from .codex_profiles import install_profiles
 from .evidence import EvidenceStore
@@ -78,7 +78,7 @@ def _roles_for(profile:str,domain:str)->list[str]:
     roles=[]
     for role in canonical:
         if role in {"planner","builder","tester","evaluator","fixer","worker"}: actual=role_for(domain,role)
-        elif role=="system_tester" and domain!="code": actual=role_for(domain,"tester")
+        elif role=="system_tester" and domain not in {"code","operations"}: actual=role_for(domain,"tester")
         else: actual=role
         if actual not in roles: roles.append(actual)
     return roles
@@ -198,14 +198,13 @@ def _positive_evidence(run_dir:Path, labels:set[str], task_id:str|None=None)->bo
 def _native_mandatory_gates(run)->list[dict]:
     req=ArtifactStore.read_json(run.run_dir,"REQUEST.json",{}) or {}; profile=str(req.get("profile","lite")); domain=str(req.get("domain","code")); gates=[]
     if profile=="pro":
-        gates.append({"name":"technical_tests","ok":_positive_evidence(run.run_dir,{"technical_test"})})
+        labels=gate_types(domain,"pro_test"); gates.append({"name":"domain_tests","ok":_positive_evidence(run.run_dir,labels)})
     elif profile=="factory":
         tasks=ArtifactStore.read_json(run.run_dir,"TASKS.json",None); task_ok=False
         try:
             graph=TaskGraph(tasks); task_ok=all(_positive_evidence(run.run_dir,{"task_verification"},task["id"]) for task in graph.tasks)
-        except TaskGraphError:
-            task_ok=False
-        gates.append({"name":"task_graph","ok":task_ok}); gates.append({"name":"system_test","ok":_positive_evidence(run.run_dir,{"system_test"})})
+        except TaskGraphError: task_ok=False
+        gates.append({"name":"task_graph","ok":task_ok}); gates.append({"name":"system_test","ok":_positive_evidence(run.run_dir,gate_types(domain,"factory_system"))})
         if domain in {"code","operations"}: gates.append({"name":"security","ok":_positive_evidence(run.run_dir,{"security"})})
     return gates
 
