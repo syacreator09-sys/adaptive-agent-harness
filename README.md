@@ -1,28 +1,30 @@
 # Adaptive Agent Harness (AAH)
 
-**Adaptive Agent Harness** is a subscription-first multi-agent runtime for work that must be **built, independently verified, repaired, re-verified, and accepted only with evidence**.
+**Adaptive Agent Harness** is a subscription-first multi-agent runtime for work that must be **planned, built, independently verified, repaired, re-verified, and accepted only with evidence**.
 
-It supports three power levels from one repository:
+One repository provides three execution levels:
 
-- **LITE** — minimal Planner → Builder → Evaluator loop with fresh independent agents, file-based coordination, binary acceptance criteria, Git checkpoints, findings, and bounded repair loops.
-- **PRO** — adds architecture, technical testing, dedicated fixing, progress detection, and stronger isolation.
-- **FACTORY** — decomposes large systems into a task DAG, runs bounded workers, integrates them, system-tests the result, performs independent/security review, and passes a deterministic Final Gate.
+- **LITE** — Planner → Builder → fresh Evaluator, with bounded repair loops.
+- **PRO** — adds Architect, independent technical Tester, dedicated Fixer, progress detection, and stronger gates.
+- **FACTORY** — decomposes large systems into a validated task DAG, verifies every task independently, integrates only PASSed work, system-tests the result, performs security/final review, and finishes through a deterministic Final Gate.
 
-No GitHub Actions are installed. No API key is required. Claude Code and/or Codex CLI can use their existing authenticated subscriptions.
+AAH does **not** require API keys. It adapts to authenticated **Claude Code**, **Codex CLI**, or both. Paid API fallback is disabled by default. There are **no GitHub Actions** in this repository.
 
-## Why
+## Core rule
 
-The producer is never allowed to approve its own work. Every required criterion is one of:
+The producer never approves its own work.
 
-- `PASS` — verified with admissible evidence;
+Every required criterion is one of:
+
+- `PASS` — proven by explicit positive evidence;
 - `FAIL` — proven failure;
-- `UNVERIFIED` — not proven, therefore **not PASS**.
+- `UNVERIFIED` — not proven, therefore not PASS.
 
-The deterministic Final Gate, not an agent sentence, decides completion.
+Evidence used for PASS must contain a stable `id` or `type` and explicit `ok: true`. Narrative statements such as “looks good” are not sufficient.
 
-## Install into any project
+The Planner's acceptance rubric is **sealed before implementation**. Evaluators may update result status/evidence, but they cannot remove criteria, weaken `required`, or change the acceptance contract. Final Gate rejects contract drift.
 
-Clone AAH once, then install it into a new or existing project:
+## Install into a new or existing project
 
 ```bash
 git clone https://github.com/syacreator09-sys/adaptive-agent-harness.git
@@ -30,19 +32,22 @@ cd adaptive-agent-harness
 ./install.sh ~/path/to/your-project
 ```
 
+If the target directory does not exist, `install.sh` creates it. Existing projects are inspected before AAH modifies its own integration files.
+
 The installer:
 
-1. requires Python 3.11+ but no Python packages from the network;
-2. copies a self-contained AAH runtime into `<project>/.aah/runtime`;
+1. requires Python 3.11+ and uses only the Python standard library at runtime;
+2. copies AAH into `<project>/.aah/runtime`;
 3. creates `<project>/.aah/bin/factory`;
-4. initializes Git if the project has none (disable with `AAH_NO_GIT_INIT=1`);
-5. inspects the existing project before modifying it;
-6. stores only `.env` **variable names/classifications**, never values;
-7. detects stack, test/build commands, Claude/Codex, Git, Docker, Playwright, FFmpeg, Semgrep and other local tools;
-8. installs uniquely named Claude Code bridge agents/skill without replacing unrelated `.claude` files;
-9. appends an idempotent AAH block to `AGENTS.md` rather than replacing existing instructions;
-10. adds `.aah/` to `.gitignore`;
-11. never creates `.github/workflows/*`.
+4. initializes Git only when the target has no repository, unless `AAH_NO_GIT_INIT=1`;
+5. detects stack, package scripts, tests/build commands, Git/worktree state, tools and provider CLIs;
+6. records `.env*` variable **names/classifications only**, never their values;
+7. installs uniquely named Claude Code AAH agents and `/aah` skill without replacing unrelated agents;
+8. merges an idempotent Claude `PreToolUse` Guardian hook while preserving existing valid hooks;
+9. adds named Codex AAH filesystem permission profiles only when Codex is present, without changing the user's default profile;
+10. appends an idempotent AAH section to `AGENTS.md` instead of replacing existing instructions;
+11. adds `.aah/` to `.gitignore`;
+12. never creates `.github/workflows/*`.
 
 ## First check
 
@@ -50,21 +55,21 @@ The installer:
 .aah/bin/factory doctor --json
 ```
 
-Provider modes adapt automatically:
+AAH distinguishes **installed CLI** from **authenticated subscription session**. Provider modes adapt automatically:
 
-- Claude only → all roles use fresh Claude sessions;
-- Codex only → all roles use fresh Codex executions;
-- both → build/review is cross-provider when possible.
+- Claude only → fresh Claude executions/sessions;
+- Codex only → fresh Codex executions;
+- Claude + Codex → cross-provider build/review when useful.
 
-With subscription-only mode, `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` are removed from provider child-process environments. AAH never silently falls back to paid API usage.
+In subscription-only mode, provider child processes do not inherit `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`, so AAH does not silently switch into API billing.
 
-## Run
+## Run automatically
 
 ```bash
 .aah/bin/factory run "add a reservations dashboard" --profile auto
 ```
 
-Force a level when useful:
+Force a profile when useful:
 
 ```bash
 .aah/bin/factory run "fix this endpoint" --profile lite
@@ -72,29 +77,214 @@ Force a level when useful:
 .aah/bin/factory run "build the full multi-service platform" --profile factory
 ```
 
-Guardian is independent from complexity:
+Complexity and risk are independent. A small production auth change can use LITE with a strict Guardian:
 
 ```bash
 .aah/bin/factory run "change production auth" --profile lite --guardian locked
 ```
 
-Modes:
+## Native Claude Code mode
 
-- `open` — routine local work, universal destructive commands still blocked;
-- `guarded` — default protection for project work;
-- `locked` — production/auth/payments/infra-sensitive work with stricter gates.
-
-For Claude Code, `install.sh` also installs an idempotent `PreToolUse` Guardian hook that enforces dangerous-command and sensitive-path rules before tools execute. Existing Claude hooks are preserved. Codex executions use its native `read-only`/`workspace-write` sandbox and are never switched to full-access automatically.
-
-## Claude Code native mode
-
-After installation, open Claude Code inside the target project and run:
+After installation, open Claude Code in the target project:
 
 ```text
 /aah "build the requested feature"
 ```
 
-The native bridge uses fresh Claude subagents instead of launching a nested Claude CLI. It still uses AAH run artifacts and the deterministic `factory gate` command.
+Native mode orchestrates fresh AAH subagents and uses the same disk artifacts and deterministic Final Gate. It does not let one subagent inherit another agent's hidden reasoning.
+
+The native flow seals the rubric immediately after Planner output:
+
+```bash
+.aah/bin/factory seal-rubric <run_id>
+```
+
+When a bounded level is exhausted, native mode creates a **fresh child run** and hands off only persistent artifacts:
+
+```bash
+# LITE → PRO
+.aah/bin/factory escalate <lite_run_id> --profile pro --json
+
+# PRO → FACTORY
+.aah/bin/factory escalate <pro_run_id> --profile factory --json
+```
+
+The child receives `PARENT_RUN.json` and `ESCALATION_CONTEXT.json` with normalized parent rubric/findings/report and a new Git baseline. It does not rely on shared conversational memory.
+
+## Profiles
+
+### LITE
+
+```text
+Planner
+  ↓
+sealed SPEC + RUBRIC
+  ↓
+Builder
+  ↓
+fresh Evaluator
+  ↓
+FAIL → Builder FIX → fresh Evaluator
+  ↓
+Final Gate
+```
+
+Default maximum: 3 evaluation passes. When the bounded loop cannot solve the task, auto mode escalates to PRO with artifact handoff.
+
+### PRO
+
+```text
+Planner → sealed rubric
+   ↓
+Architect
+   ↓
+Builder
+   ↓
+Technical Tester
+   ↓
+fresh Evaluator
+   ↓
+FAIL → Fixer → Tester → fresh Evaluator
+   ↓
+Final Gate
+```
+
+PRO requires domain-specific positive test evidence before it can finish. Repeated no-progress triggers architectural re-diagnosis and can escalate to FACTORY.
+
+### FACTORY
+
+```text
+Planner → sealed rubric
+   ↓
+Architect → validated task DAG
+   ↓
+Worker(task A) → fresh Task Evaluator
+Worker(task B) → fresh Task Evaluator
+...
+   ↓
+Integrator (PASSed tasks only)
+   ↓
+System/Domain Tester
+   ↓
+fresh Global Evaluator
+   ↓
+Security Review (code/operations)
+   ↓
+Final Reviewer
+   ↓
+Deterministic Final Gate
+```
+
+FACTORY refuses malformed DAGs. Every task requires:
+
+- safe unique `id`;
+- `profile: lite|pro`;
+- `depends_on` list;
+- non-empty measurable `acceptance` criteria.
+
+The Architect receives one repair opportunity with the validation error. If the DAG remains invalid, FACTORY pauses instead of silently inventing a generic task.
+
+Completed FACTORY tasks are persisted in `TASK_OUTPUTS.json`; a resumed run skips only tasks that already passed independent verification.
+
+## Guardian
+
+Guardian is a deterministic enforcement layer, not another developer agent.
+
+- **OPEN** — routine local work; universal destructive actions remain blocked.
+- **GUARDED** — default; protects secrets, project boundaries, AAH internals and suspicious/destructive commands.
+- **LOCKED** — production/auth/payments/infra-sensitive work with approval gates for production-changing actions.
+
+Claude's `PreToolUse` hook enforces role/path/command rules before tools run. Review agents cannot modify product code. Sensitive reads/writes, project-root escapes, `.env*`, credential directories and protected AAH runtime files are blocked. Grep/Glob are also checked.
+
+Codex executions use AAH's named read-only/workspace permission profiles and native sandboxing; AAH never switches to unrestricted access automatically.
+
+## Project Adapter and environment routing
+
+`factory setup` creates `.aah/project.json` containing:
+
+- detected stacks/manifests;
+- existing instruction files (`CLAUDE.md`, `AGENTS.md`, etc.);
+- Git branch/base/dirty/worktree state;
+- package scripts and probable build/test commands;
+- `.env*` filenames and variable names only;
+- `config` vs `secret` classification;
+- local capability map.
+
+Review/research agents do not receive project secret-valued env vars. Implementation agents receive a project secret only when a task explicitly declares that env name as required.
+
+## Adaptive Tool Router
+
+Tools are resolved **per machine, provider, role and task**. AAH does not claim capabilities that are not actually available.
+
+Examples:
+
+- Claude web-grounded roles can expose `WebSearch` / `WebFetch`;
+- Codex filesystem work uses its sandbox, but AAH does not assume Codex web is enabled because that is installation-dependent;
+- Git, Docker, Playwright, FFmpeg/FFprobe, Semgrep and language/package tools are discovered locally;
+- missing required tools stop the task instead of creating fake verification.
+
+Optional machine-specific adapters can expose external media/search systems:
+
+```bash
+export AAH_TOOL_IMAGE=/path/to/image-adapter
+export AAH_TOOL_VIDEO=/path/to/video-adapter
+export AAH_TOOL_VOICE=/path/to/voice-adapter
+export AAH_TOOL_WEB=/path/to/web-search-adapter
+```
+
+The same clone can therefore run differently on a Claude-only laptop, a Claude+Codex workstation, or a media-capable production machine without editing AAH core.
+
+## Domain packs
+
+The universal protocol remains:
+
+```text
+REQUEST → SPEC → PRODUCE → VERIFY → FINDINGS → FIX → RE-VERIFY → FINAL GATE
+```
+
+Available domains:
+
+```bash
+factory run "build this feature" --domain code
+factory run "create six verified carousel assets" --domain content
+factory run "research this market with verified claims" --domain research
+factory run "build and dry-run this automation" --domain operations
+```
+
+Deterministic domain gates include:
+
+- code / operations → `technical_test`, FACTORY `system_test`;
+- content → `content_check`;
+- research → `fact_check`;
+- every FACTORY task → `task_verification` with matching `task_id`;
+- code / operations FACTORY → `security` gate.
+
+Content image/video/voice production requires a real connected adapter when the request needs that medium. Research requires real web capability. AAH stops rather than pretending those tools exist.
+
+## Run artifacts
+
+```text
+.aah/runs/RUN-YYYYMMDD-NNN/
+├── REQUEST.json
+├── SPEC.md
+├── RUBRIC.json
+├── RUBRIC_BASELINE.json
+├── ARCHITECTURE.md       # PRO / FACTORY
+├── TASKS.json            # FACTORY
+├── TASK_OUTPUTS.json     # FACTORY
+├── STATE.json
+├── FINDINGS.json
+├── EVIDENCE.jsonl
+├── PARENT_RUN.json       # escalated child
+├── ESCALATION_CONTEXT.json
+├── FINAL_REPORT.json
+├── FINAL_REPORT.md
+├── logs/
+├── screenshots/
+└── artifacts/
+```
+
+Requests, evidence, agent artifacts and report extras pass through secret redaction before persistence. Run/task IDs and artifact paths are validated against traversal escapes.
 
 ## Commands
 
@@ -108,144 +298,37 @@ factory eval
 factory fix
 factory report
 factory rollback
-factory init-run   # native-agent bridge support
-factory gate       # deterministic completion check
+factory init-run
+factory seal-rubric
+factory escalate
+factory gate
 ```
 
-## Project Adapter and environment routing
-
-AAH is designed for both blank repositories and mature projects. `factory setup` creates `.aah/project.json` with:
-
-- detected stacks/manifests;
-- existing instruction files (`CLAUDE.md`, `AGENTS.md`, etc.);
-- Git branch/base/dirty state;
-- package scripts and probable build/test commands;
-- `.env*` filenames and variable **names only**;
-- classification of names as `config` or `secret`;
-- local tool capability map.
-
-Project env values are not copied into AAH state. Review agents do not receive project secret environment values. Implementation agents receive secret-valued environment variables only when a task explicitly declares them; provider authentication remains CLI-managed.
-
-## Adaptive Tool Router
-
-Tools are not hardcoded globally. Each agent declares capabilities, each task may add requirements, and Tool Router resolves them against the current machine. For example:
-
-- browser → Playwright when available;
-- container work → Docker when available;
-- media validation → FFmpeg when available;
-- security → Semgrep when available;
-- Node/Python/Go/Rust tools follow the detected project stack.
-
-Missing optional tools degrade the plan; missing tools explicitly marked `required_tools` stop the task instead of pretending verification occurred.
-
-## Profiles
-
-### LITE
-
-```text
-Planner → Builder → Evaluator
-                    │
-              findings?
-                    │
-              Builder FIX
-                    │
-             fresh Evaluator
-                    │
-               Final Gate
-```
-
-Default maximum: 3 evaluation passes. If LITE cannot make progress it signals escalation to PRO.
-
-### PRO
-
-```text
-Planner → Architect → Builder → Tester → Evaluator
-                                      │
-                                   Findings
-                                      │
-                                    Fixer
-                                      │
-                              Tester → Evaluator
-                                      │
-                                  Final Gate
-```
-
-Default maximum: 5 passes. Repeated no-progress triggers architectural re-diagnosis and can escalate to FACTORY.
-
-### FACTORY
-
-```text
-Router → Planner → Architect → Task DAG → Workers
-                                        ↓
-                                    Integrator
-                                        ↓
-                                  System Tester
-                                        ↓
-                                    Evaluator
-                                        ↓
-                                 Security Review
-                                        ↓
-                                   Final Review
-                                        ↓
-                                    Final Gate
-```
-
-Tasks include dependency edges and may carry LITE/PRO profile hints. The safe scheduler is sequential by default; isolated parallelism can be added where the host provides reliable worktree/sandbox control.
-
-## Domain packs
-
-The same protocol can be used beyond code:
-
-```bash
-factory run "create six verified carousel assets" --domain content
-factory run "research this market with verified claims" --domain research
-factory run "build and dry-run this automation" --domain operations
-```
-
-Domain role routing changes the producer/evaluator identities and evidence types while preserving independent verification and Final Gate.
-
-## Run artifacts
-
-Every execution is resumable from disk:
-
-```text
-.aah/runs/RUN-YYYYMMDD-NNN/
-├── REQUEST.json
-├── SPEC.md
-├── RUBRIC.json
-├── ARCHITECTURE.md       # PRO/FACTORY
-├── TASKS.json            # FACTORY
-├── STATE.json
-├── FINDINGS.json
-├── EVIDENCE.jsonl
-├── FINAL_REPORT.md
-├── logs/
-├── screenshots/
-└── artifacts/
-```
-
-Agents coordinate through artifacts, not hidden shared conversational memory.
+`factory rollback` is dry-run by default. If the project was already dirty at the recorded Git baseline, AAH refuses destructive restore unless the operator explicitly accepts that risk.
 
 ## Models
 
-Roles request capabilities rather than permanent model versions. Defaults use stable provider aliases:
+Roles request capabilities rather than permanent model versions. Stable defaults use provider aliases/current CLI defaults:
 
 - Claude planning/architecture under `quality` → `opus` alias;
 - routine Claude execution/review → `sonnet` alias;
-- Codex → the user's current CLI/subscription default unless locally overridden.
+- Codex → the authenticated CLI/subscription default unless locally overridden.
 
-Machine-specific overrides live in ignored `.aah/factory.local.yaml`, so the same repository can clone onto different machines without editing source.
+Machine-specific overrides live in ignored `.aah/factory.local.yaml`.
 
-## Test AAH itself
+## Verify AAH itself
 
-AAH's automated suite uses deterministic scripted providers; it does not consume a Claude/Codex subscription:
+AAH's automated suite uses deterministic scripted providers and does not consume Claude/Codex subscriptions:
 
 ```bash
-python -m unittest discover -s tests -v
+python3 -m unittest discover -s tests -v
 bash -n install.sh
+python3 -m compileall -q factory tests
 ```
 
-Real-provider testing is intentionally local/opt-in. There are **no GitHub Actions**.
+A release smoke test can install into a temporary project and verify the generated CLI/Claude bridge. Real-provider smoke tests are intentionally local and opt-in.
+
+There are **no GitHub Actions**.
 
 ## License
 
