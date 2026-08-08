@@ -12,16 +12,7 @@ BASE_RULES=[
 
 
 def A(identity, mission, capability, tools, inputs, outputs, rules=None, required_tools=None):
-    return {
-        "identity":identity,
-        "mission":mission,
-        "capability":capability,
-        "tools":tools,
-        "required_tools":required_tools or [],
-        "inputs":inputs,
-        "outputs":outputs,
-        "rules":BASE_RULES+(rules or []),
-    }
+    return {"identity":identity,"mission":mission,"capability":capability,"tools":tools,"required_tools":required_tools or [],"inputs":inputs,"outputs":outputs,"rules":BASE_RULES+(rules or [])}
 
 
 BUILTIN_AGENTS: dict[str,dict[str,Any]]={
@@ -39,20 +30,16 @@ BUILTIN_AGENTS: dict[str,dict[str,Any]]={
  "final_reviewer":A("Final Reviewer","Challenge completion, scope and integration before deterministic Final Gate.","independent_review",["read"],["SPEC","RUBRIC","FINDINGS","EVIDENCE"],["review_summary"],["Cannot set DONE and cannot override Final Gate."]),
  "content_strategist":A("Content Strategist","Turn a content goal into production criteria and variants.","deep_reasoning",["read","web"],["REQUEST","PROJECT_MANIFEST"],["SPEC.md","RUBRIC.json"]),
  "content_producer":A("Content Producer","Produce the requested content artifacts using only capabilities actually connected on this machine.","strong_coding",["image","video","voice","ffmpeg","write","shell"],["SPEC"],["artifacts"],["Do not claim a media artifact exists if the required media adapter is unavailable."]),
- "content_evaluator":A("Independent Content Evaluator","Verify content against measurable platform, brand, factual and production criteria.","independent_review",["read","files","media_probe","web","shell"],["SPEC","RUBRIC","content_artifacts"],["RUBRIC.json","FINDINGS.json","EVIDENCE","task_result"],["Must not modify the produced content during evaluation.","When mode is task_evaluate, return task_result.status as PASS, FAIL, or UNVERIFIED and emit type task_verification with task_id and ok."]),
+ "content_evaluator":A("Independent Content Evaluator","Verify content against measurable platform, brand, factual and production criteria.","independent_review",["read","files","media_probe","web","shell"],["SPEC","RUBRIC","content_artifacts"],["RUBRIC.json","FINDINGS.json","EVIDENCE","task_result"],["Must not modify the produced content during evaluation.","For normal testing/system evaluation emit type content_check with explicit ok:true/false.","When mode is task_evaluate, return task_result.status and emit type task_verification with task_id and explicit ok:true/false."]),
  "researcher":A("Researcher","Collect source-grounded evidence for a bounded research question.","deep_reasoning",["web","files"],["SPEC"],["EVIDENCE"],["Do not fabricate sources when web access is unavailable."],["web"]),
- "fact_checker":A("Independent Fact Checker","Verify claims against sources, recency, contradictions and citation support.","independent_review",["web","files"],["SPEC","RUBRIC","EVIDENCE"],["RUBRIC.json","FINDINGS.json","EVIDENCE","task_result"],["Do not rewrite the research while evaluating it.","Do not approve claims without source access.","When mode is task_evaluate, return task_result.status as PASS, FAIL, or UNVERIFIED and emit type task_verification with task_id and ok."],["web"]),
+ "fact_checker":A("Independent Fact Checker","Verify claims against sources, recency, contradictions and citation support.","independent_review",["web","files"],["SPEC","RUBRIC","EVIDENCE"],["RUBRIC.json","FINDINGS.json","EVIDENCE","task_result"],["Do not rewrite the research while evaluating it.","Do not approve claims without source access.","For normal testing/system evaluation emit type fact_check with explicit ok:true/false.","When mode is task_evaluate, return task_result.status and emit type task_verification with task_id and explicit ok:true/false."],["web"]),
 }
 
 
 class AgentRegistry:
     def __init__(self, overrides: dict[str,dict[str,Any]]|None=None):
         self._agents=copy.deepcopy(BUILTIN_AGENTS)
-        for name,patch in (overrides or {}).items():
-            self._agents.setdefault(name,{}).update(patch)
+        for name,patch in (overrides or {}).items(): self._agents.setdefault(name,{}).update(patch)
 
-    def names(self):
-        return sorted(self._agents)
-
-    def get(self,name):
-        return copy.deepcopy(self._agents[name])
+    def names(self): return sorted(self._agents)
+    def get(self,name): return copy.deepcopy(self._agents[name])
