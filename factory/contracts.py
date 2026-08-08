@@ -54,23 +54,14 @@ def normalize_rubric(value: Any) -> list[dict[str, Any]]:
 def status_from_baseline(criteria: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "criteria": [
-            {
-                "id": item["id"],
-                "status": "UNVERIFIED",
-                "evidence": [],
-            }
+            {"id": item["id"], "status": "UNVERIFIED", "evidence": []}
             for item in criteria
         ]
     }
 
 
 def seal_contract(run_dir: Path) -> dict[str, Any]:
-    """Seal Planner outputs into an immutable acceptance baseline.
-
-    Planner writes SPEC.md + RUBRIC.json. The runtime owns RUBRIC_BASELINE.json,
-    RUBRIC_STATUS.json and CONTRACT.json. Once CONTRACT.json exists, sealing is
-    idempotent and any baseline/spec mutation is detected instead of accepted.
-    """
+    """Normalize and seal Planner outputs into the immutable acceptance contract."""
     run_dir = Path(run_dir)
     spec_path = run_dir / "SPEC.md"
     rubric_path = run_dir / "RUBRIC.json"
@@ -90,10 +81,18 @@ def seal_contract(run_dir: Path) -> dict[str, Any]:
         draft = json.loads(rubric_path.read_text(encoding="utf-8"))
     except Exception as exc:
         raise ContractError("RUBRIC.json is not valid JSON") from exc
+
     criteria = normalize_rubric(draft)
     baseline = {"criteria": criteria}
-    baseline_text = json.dumps(baseline, indent=2, sort_keys=True) + "\n"
     spec_text = spec + "\n"
+    baseline_text = json.dumps(baseline, indent=2, sort_keys=True) + "\n"
+
+    # Normalize the Planner's files exactly once before hashing, so harmless
+    # trailing whitespace cannot create an immediate false tamper signal.
+    if not contract_path.exists():
+        spec_path.write_text(spec_text, encoding="utf-8")
+        rubric_path.write_text(json.dumps({"criteria": criteria}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
     expected = {
         "version": 1,
         "spec_sha256": _sha256_text(spec_text),
@@ -107,7 +106,7 @@ def seal_contract(run_dir: Path) -> dict[str, Any]:
             current = json.loads(contract_path.read_text(encoding="utf-8"))
         except Exception as exc:
             raise ContractError("CONTRACT.json is corrupt") from exc
-        if current.get("spec_sha256") != expected["spec_sha256"]:
+        if spec_path.read_text(encoding="utf-8") != spec_text or current.get("spec_sha256") != expected["spec_sha256"]:
             raise ContractError("SPEC.md changed after contract sealing")
         if not baseline_path.exists():
             raise ContractError("sealed contract is missing RUBRIC_BASELINE.json")
@@ -134,12 +133,12 @@ def verify_contract(run_dir: Path) -> tuple[bool, list[str]]:
         contract = json.loads(contract_path.read_text(encoding="utf-8"))
     except Exception:
         return False, ["contract:invalid_json"]
+
     if not spec_path.exists():
         failures.append("contract:spec_missing")
-    else:
-        spec_text = spec_path.read_text(encoding="utf-8")
-        if _sha256_text(spec_text) != contract.get("spec_sha256"):
-            failures.append("contract:spec_hash_mismatch")
+    elif _sha256_text(spec_path.read_text(encoding="utf-8")) != contract.get("spec_sha256"):
+        failures.append("contract:spec_hash_mismatch")
+
     if not baseline_path.exists():
         failures.append("contract:rubric_baseline_missing")
     else:
