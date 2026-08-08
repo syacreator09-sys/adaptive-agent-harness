@@ -4,8 +4,9 @@ import unittest
 import tempfile
 from pathlib import Path
 from unittest import mock
-from factory.providers import ClaudeProvider, CodexProvider, ProviderRegistry
+from factory.providers import ClaudeProvider, CodexProvider, ProviderRegistry, ProviderError
 from factory.codex_profiles import install_profiles
+
 
 class ProviderCommandTests(unittest.TestCase):
     @mock.patch('subprocess.run')
@@ -23,20 +24,58 @@ class ProviderCommandTests(unittest.TestCase):
 
     @mock.patch('subprocess.run')
     def test_codex_review_is_read_only(self, run):
-        run.return_value=mock.Mock(returncode=0,stdout='{}',stderr='')
+        events='\n'.join([
+            json.dumps({'type':'item.completed','item':{'id':'1','type':'agent_message','text':'{}'}}),
+            json.dumps({'type':'turn.completed','usage':{}}),
+        ])+'\n'
+        run.return_value=mock.Mock(returncode=0,stdout=events,stderr='')
         with tempfile.TemporaryDirectory() as td:
             root=Path(td); install_profiles(root)
             CodexProvider().run('review',root,access='read-only')
         cmd=run.call_args.args[0]
         self.assertIn('--sandbox',cmd)
         self.assertEqual(cmd[cmd.index('--sandbox')+1],'read-only')
-        # codex-cli 0.146.0's `codex exec --help` has no --ask-for-approval
-        # (and no --full-auto) -- `exec` is already non-interactive, the
-        # sandbox policy alone governs the run. Confirmed live: the old
-        # flag made every codex-provider invocation fail before reaching
-        # the model ("unexpected argument '--ask-for-approval' found").
         self.assertNotIn('--ask-for-approval',cmd)
         self.assertIn('default_permissions="aah_readonly"',cmd)
+
+    @mock.patch('subprocess.run')
+    def test_codex_extracts_nested_agent_message_json(self, run):
+        payload={'summary':'ok','artifacts':{'SPEC.md':'x'},'evidence':[]}
+        events='\n'.join([
+            json.dumps({'type':'thread.started','thread_id':'t'}),
+            json.dumps({'type':'turn.started'}),
+            json.dumps({'type':'item.completed','item':{'id':'i1','type':'agent_message','text':json.dumps(payload)}}),
+            json.dumps({'type':'turn.completed','usage':{'input_tokens':1,'output_tokens':1}}),
+        ])+'\n'
+        run.return_value=mock.Mock(returncode=0,stdout=events,stderr='')
+        with tempfile.TemporaryDirectory() as td:
+            result=CodexProvider().run('x',Path(td),access='read-only')
+        self.assertEqual(result['summary'],'ok')
+        self.assertEqual(result['artifacts']['SPEC.md'],'x')
+
+    @mock.patch('subprocess.run')
+    def test_codex_structured_turn_failure_raises_even_exit_zero(self, run):
+        events='\n'.join([
+            json.dumps({'type':'turn.failed','error':{'message':'quota exceeded'}}),
+        ])+'\n'
+        run.return_value=mock.Mock(returncode=0,stdout=events,stderr='')
+        with tempfile.TemporaryDirectory() as td:
+            with self.assertRaises(ProviderError):
+                CodexProvider().run('x',Path(td),access='read-only')
+
+    @mock.patch('subprocess.run')
+    def test_codex_known_stream_lag_item_does_not_mask_completed_turn(self, run):
+        events='\n'.join([
+            json.dumps({'type':'item.completed','item':{'id':'err','type':'error','message':'in-process app-server event stream lagged; dropped 12 events'}}),
+            json.dumps({'type':'item.completed','item':{'id':'msg','type':'agent_message','text':'{"summary":"done","artifacts":{},"evidence":[]}'}}),
+            json.dumps({'type':'turn.completed','usage':{}}),
+        ])+'\n'
+        run.return_value=mock.Mock(returncode=0,stdout=events,stderr='')
+        with tempfile.TemporaryDirectory() as td:
+            result=CodexProvider().run('x',Path(td),access='read-only')
+        self.assertEqual(result['summary'],'done')
+        self.assertTrue(result['provider_warnings'])
+
 
 class ProviderDiscoveryTests(unittest.TestCase):
     @mock.patch('factory.providers.shutil.which')
@@ -74,4 +113,6 @@ class ProviderDiscoveryTests(unittest.TestCase):
         self.assertIsNone(providers['codex']['authenticated'])
         self.assertEqual(providers['codex']['auth'],'status_probe_unavailable')
 
-if __name__=='__main__': unittest.main()
+
+if __name__=='__main__':
+    unittest.main()
