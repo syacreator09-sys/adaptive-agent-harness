@@ -18,14 +18,14 @@ def evaluator_fail():
     return {"artifacts": {
         "RUBRIC.json": [{"id":"R-1","description":"works","required":True,"status":"FAIL","evidence":["E-1"]}],
         "FINDINGS.json": [{"id":"F-1","severity":"major","status":"open","rubric_id":"R-1"}]
-    }, "evidence":[{"id":"E-1","kind":"test","ok":False,"detail":"failed"}]}
+    }, "evidence":[{"id":"E-1","type":"rubric_check","ok":False,"detail":"failed"}]}
 
 
 def evaluator_pass():
     return {"artifacts": {
         "RUBRIC.json": [{"id":"R-1","description":"works","required":True,"status":"PASS","evidence":["E-2"]}],
         "FINDINGS.json": [{"id":"F-1","severity":"major","status":"resolved","rubric_id":"R-1"}]
-    }, "evidence":[{"id":"E-2","kind":"test","ok":True,"detail":"passed"}]}
+    }, "evidence":[{"id":"E-2","type":"rubric_check","ok":True,"detail":"passed"}]}
 
 
 class ProfileTests(unittest.TestCase):
@@ -50,8 +50,8 @@ class ProfileTests(unittest.TestCase):
                 "architect":[{"artifacts":{"ARCHITECTURE.md":"arch"}}],
                 "builder":[{"summary":"built"}],
                 "tester":[
-                    {"evidence":[{"id":"T-1","kind":"test","ok":True,"detail":"suite"}]},
-                    {"evidence":[{"id":"T-2","kind":"test","ok":True,"detail":"suite2"}]},
+                    {"evidence":[{"id":"T-1","type":"technical_test","ok":True,"detail":"suite"}]},
+                    {"evidence":[{"id":"T-2","type":"technical_test","ok":True,"detail":"suite2"}]},
                 ],
                 "evaluator":[evaluator_fail(), evaluator_pass()],
                 "fixer":[{"summary":"fixed"}],
@@ -75,13 +75,13 @@ class ProfileTests(unittest.TestCase):
                 "architect":[{"artifacts":{"ARCHITECTURE.md":"arch","TASKS.json":task_graph}}],
                 "worker":[{"summary":"t1"},{"summary":"t2"}],
                 "task_evaluator":[
-                    {"task_result":{"status":"PASS"},"evidence":[{"id":"TE-1","kind":"task","ok":True,"detail":"T1 verified"}]},
-                    {"task_result":{"status":"PASS"},"evidence":[{"id":"TE-2","kind":"task","ok":True,"detail":"T2 verified"}]},
+                    {"task_result":{"status":"PASS"},"evidence":[{"id":"TE-1","type":"task_verification","task_id":"T1","ok":True,"detail":"T1 verified"}]},
+                    {"task_result":{"status":"PASS"},"evidence":[{"id":"TE-2","type":"task_verification","task_id":"T2","ok":True,"detail":"T2 verified"}]},
                 ],
                 "integrator":[{"summary":"integrated"}],
-                "system_tester":[{"evidence":[{"id":"SYS-1","kind":"test","ok":True,"detail":"system"}]}],
+                "system_tester":[{"evidence":[{"id":"SYS-1","type":"system_test","ok":True,"detail":"system"}]}],
                 "evaluator":[evaluator_pass()],
-                "security_reviewer":[{"evidence":[{"id":"SEC-1","kind":"security","ok":True,"detail":"secure"}]}],
+                "security_reviewer":[{"evidence":[{"id":"SEC-1","type":"security","ok":True,"detail":"secure"}]}],
                 "final_reviewer":[{"summary":"reviewed"}],
             })
             out = FactoryRunner(target, ex).run("big system", guardian="guarded")
