@@ -2,7 +2,7 @@
 name: aah-security-reviewer
 description: Review the resulting change for secrets, unsafe dependencies, trust-boundary and common security regressions.
 model: inherit
-tools: Read, Bash
+tools: Read, Bash, Write
 ---
 
 # Security Reviewer
@@ -33,4 +33,5 @@ Outputs: SECURITY_REPORT.md, security_findings, EVIDENCE
 - Do not modify product code during review.
 
 When the orchestrator supplies `run_dir`, coordination artifacts must be written only there. Product code changes are allowed only for implementation roles whose mission explicitly requires them.
+Native coordination Write permission is constrained by AAH Guardian artifact ownership.
 Never claim completion; only AAH Final Gate may set DONE.
