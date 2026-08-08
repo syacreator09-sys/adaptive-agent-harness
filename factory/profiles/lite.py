@@ -24,15 +24,7 @@ class LiteRunner(BaseRunner):
         journal = EventJournal(run.run_dir)
 
         try:
-            if not (run.run_dir / "CONTRACT.json").exists():
-                state.transition(Phase.PLANNING)
-                self._dispatch(
-                    run,
-                    role_for(domain, "planner"),
-                    {"request": request, "mode": "plan", "profile": "lite"},
-                    context,
-                )
-                self._seal(run)
+            self._ensure_contract(run, state, context, request, domain, "lite")
 
             build_checkpoint = run.run_dir / "checkpoints" / "build.json"
             if not build_checkpoint.exists():
@@ -63,19 +55,22 @@ class LiteRunner(BaseRunner):
                     context,
                 )
                 gate = self._gate(run)
-                journal.append("EVALUATION_COMPLETED", pass_no=pass_no, done=gate["done"], failures=gate["failures"])
+                journal.append(
+                    "EVALUATION_COMPLETED",
+                    pass_no=pass_no,
+                    done=gate["done"],
+                    failures=gate["failures"],
+                )
                 if gate["done"]:
                     state.transition(Phase.DONE, status="done")
                     return self._write_report(run, gate, {"passes": pass_no})
 
                 pending = self._pending_findings(run)
-                blocking_ids = tuple(
-                    sorted(
-                        str(item.get("id"))
-                        for item in pending
-                        if str(item.get("severity", "")).lower() in {"critical", "major"}
-                    )
-                )
+                blocking_ids = tuple(sorted(
+                    str(item.get("id"))
+                    for item in pending
+                    if str(item.get("severity", "")).lower() in {"critical", "major"}
+                ))
                 if blocking_ids and previous_open == blocking_ids:
                     journal.append("LITE_STALLED", pass_no=pass_no, repeated_findings=list(blocking_ids))
                     break
@@ -101,17 +96,27 @@ class LiteRunner(BaseRunner):
                         finding_ids=[item.get("id") for item in pending],
                     )
                 elif pass_no < max_passes:
-                    # Gate failed but evaluator produced no actionable finding.
-                    # Do not let the producer guess; use another fresh evaluator pass.
-                    journal.append("REVERIFY_WITHOUT_FIX", pass_no=pass_no, reason="no_actionable_findings")
+                    journal.append(
+                        "REVERIFY_WITHOUT_FIX",
+                        pass_no=pass_no,
+                        reason="no_actionable_findings",
+                    )
 
             gate = self._gate(run)
             state.transition(Phase.PAUSED, status="incomplete", escalation="pro")
-            journal.append("ESCALATION_RECOMMENDED", from_profile="lite", to_profile="pro", failures=gate["failures"])
+            journal.append(
+                "ESCALATION_RECOMMENDED",
+                from_profile="lite",
+                to_profile="pro",
+                failures=gate["failures"],
+            )
             return self._write_report(
                 run,
                 gate,
-                {"passes": min(max_passes, int(state.load().get("pass", max_passes))), "escalation": "pro"},
+                {
+                    "passes": min(max_passes, int(state.load().get("pass", max_passes))),
+                    "escalation": "pro",
+                },
             )
         except AgentDispatchError as exc:
             return self._abort(run, state, exc, state.load().get("phase", "lite"))
