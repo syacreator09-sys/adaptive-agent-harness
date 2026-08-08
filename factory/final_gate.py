@@ -20,10 +20,28 @@ def _normalize_rubric(rubric: Any) -> list[dict[str,Any]]:
     if not isinstance(rubric, list): return []
     return [item if isinstance(item, dict) else {"id": str(item), "status": "UNVERIFIED"} for item in rubric]
 
+def _normalize_findings(findings: Any) -> list[dict[str,Any]]:
+    # Same unpinned-schema failure class as _normalize_rubric, hit by the
+    # very next run after that fix (RUN-20260807-006): a real evaluator
+    # wrote FINDINGS.json as one free-form report object (root_cause,
+    # notes, verdict, ...) with no "findings"/"items" list at all --
+    # `for f in findings` iterated its string keys and crashed with the
+    # identical AttributeError. Unlike a rubric criterion (a required,
+    # countable check -- an unparseable one must fail-closed as
+    # UNVERIFIED), an unparseable FINDINGS.json carries no severity to
+    # honestly report, so it degrades to "no additional findings logged"
+    # rather than inventing a blocking one; RUBRIC.json stays the
+    # authoritative PASS/FAIL source either way.
+    if isinstance(findings, dict):
+        findings = findings.get("findings", findings.get("items", []))
+    if not isinstance(findings, list): return []
+    return [f for f in findings if isinstance(f, dict)]
+
 class FinalGate:
     def __init__(self, run_dir: Path): self.run_dir=Path(run_dir)
     def evaluate(self, rubric: list[dict[str,Any]], findings: list[dict[str,Any]], mandatory_gates: list[dict[str,Any]]|None=None) -> dict[str,Any]:
         rubric=_normalize_rubric(rubric)
+        findings=_normalize_findings(findings)
         records=EvidenceStore(self.run_dir).all()
         failures=[]
         # Same unresolved-schema gap as the rubric shape above: nothing

@@ -47,6 +47,23 @@ class FinalGateTests(unittest.TestCase):
             self.assertFalse(result["done"])
             self.assertIn("R-1:status=UNVERIFIED", result["failures"])
 
+    def test_findings_written_as_a_free_form_report_object_does_not_crash(self):
+        """Real bug found live (plan AUTONOMÍA TOTAL, 2026-08-07,
+        RUN-20260807-006): a real evaluator wrote FINDINGS.json as one
+        free-form report dict (root_cause/notes/verdict/...) with no
+        "findings" list at all -- `for f in findings` iterated the
+        dict's string keys and crashed with AttributeError, same class
+        as the RUBRIC.json crash fixed above. Must degrade to "no
+        additional findings" instead."""
+        with tempfile.TemporaryDirectory() as td:
+            run = Path(td)
+            ev = EvidenceStore(run)
+            ev.append({"id":"E-1","kind":"test","ok":True,"detail":"ok"})
+            rubric = [{"id":"R-1","status":"PASS","required":True,"evidence":["E-1"]}]
+            findings = {"root_cause":"off-by-one","verdict":"PASS","notes":["fine"]}
+            result = FinalGate(run).evaluate(rubric, findings)
+            self.assertTrue(result["done"])
+
     def test_evidence_ref_key_and_type_based_reference_are_admissible(self):
         """A real evaluator referenced evidence by its record "type"
         (e.g. "unittest_run") under the key "evidence_ref", not by the
