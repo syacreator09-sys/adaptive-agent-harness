@@ -1,7 +1,8 @@
 from __future__ import annotations
 from ..models import Phase
 from ..domains import role_for
-from ..taskgraph import TaskGraph
+from ..taskgraph import TaskGraph, TaskGraphError
+from ..evidence import EvidenceStore
 from .common import BaseRunner
 
 
@@ -67,6 +68,57 @@ class FactoryRunner(BaseRunner):
                 return {"ok":True,"history":task_history,"summary":worker.get("summary","")}
         return {"ok":False,"history":task_history,"summary":"task did not pass independent verification"}
 
+    def _validated_graph(self, run, state, ctx, domain):
+        schema={
+            "tasks":"non-empty array",
+            "task_required_fields":["id","profile","depends_on","acceptance"],
+            "profiles":["lite","pro"],
+            "acceptance":"non-empty array of measurable criteria",
+        }
+        last_error="missing TASKS.json"
+        for attempt in range(1,3):
+            tasks=self.store.read_json(run.run_dir,"TASKS.json",None)
+            if tasks is not None:
+                try:
+                    return TaskGraph(tasks)
+                except TaskGraphError as exc:
+                    last_error=str(exc)
+            state.transition(Phase.ARCHITECTURE,architecture_attempt=attempt,validation_error=last_error)
+            self._ingest(run,self.executor.execute(
+                "architect",
+                {
+                    "mode":"factory_architecture" if attempt==1 else "repair_task_graph",
+                    "require_task_graph":True,
+                    "domain":domain,
+                    "task_graph_schema":schema,
+                    "validation_error":last_error,
+                },
+                ctx,
+            ))
+
+        tasks=self.store.read_json(run.run_dir,"TASKS.json",None)
+        try:
+            return TaskGraph(tasks)
+        except TaskGraphError as exc:
+            last_error=str(exc)
+
+        findings=self._findings(run)
+        findings.append({
+            "id":"F-TASK-GRAPH",
+            "severity":"major",
+            "status":"open",
+            "rubric_id":None,
+            "detail":f"Architect failed to produce a valid task graph after repair attempt: {last_error}",
+        })
+        self.store.write_json(run.run_dir,"FINDINGS.json",findings)
+        EvidenceStore(run.run_dir).append({
+            "id":"E-TASK-GRAPH-INVALID",
+            "type":"task_graph_validation",
+            "ok":False,
+            "detail":last_error,
+        })
+        return None
+
     def run(self,request:str,guardian="guarded",domain="code",run_id=None):
         run=self._new(request,guardian,domain,run_id)
         state=self._state(run)
@@ -75,22 +127,26 @@ class FactoryRunner(BaseRunner):
         if not (run.run_dir/"SPEC.md").exists():
             state.transition(Phase.PLANNING)
             self._ingest(run,self.executor.execute(role_for(domain,"planner"),{"request":request},ctx))
-        if not (run.run_dir/"ARCHITECTURE.md").exists() or not (run.run_dir/"TASKS.json").exists():
+
+        if not (run.run_dir/"ARCHITECTURE.md").exists():
             state.transition(Phase.ARCHITECTURE)
-            self._ingest(run,self.executor.execute("architect",{"mode":"factory_architecture","require_task_graph":True,"domain":domain},ctx))
+            self._ingest(run,self.executor.execute("architect",{
+                "mode":"factory_architecture",
+                "require_task_graph":True,
+                "domain":domain,
+                "task_graph_schema":{
+                    "required_fields":["id","profile","depends_on","acceptance"],
+                    "profiles":["lite","pro"],
+                },
+            },ctx))
 
-        tasks=self.store.read_json(run.run_dir,"TASKS.json",None)
-        if not tasks:
-            tasks={"tasks":[{
-                "id":"T1",
-                "title":"Implement requested system",
-                "profile":"pro",
-                "depends_on":[],
-                "acceptance":["global rubric criteria relevant to this task pass"],
-            }]}
-            self.store.write_json(run.run_dir,"TASKS.json",tasks)
+        graph=self._validated_graph(run,state,ctx,domain)
+        if graph is None:
+            gate=self._gate(run,[{"name":"task_graph","ok":False}])
+            state.transition(Phase.PAUSED,status="incomplete",reason="invalid_task_graph")
+            return self._write_report(run,gate,{"tasks_completed":0,"blocked":"task_graph"})
 
-        graph=TaskGraph(tasks)
+        tasks={"tasks":graph.tasks}
         task_outputs=[]
         for task in graph.order():
             state.transition(Phase.BUILDING,current_task=task["id"])
