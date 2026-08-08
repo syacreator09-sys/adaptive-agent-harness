@@ -29,15 +29,15 @@ class ToolRegistry:
 
     @classmethod
     def discover(cls) -> dict[str, dict[str, Any]]:
+        """Return safe capability metadata suitable for persistence."""
         result: dict[str, dict[str, Any]] = {}
         for key, exe in cls.TOOLS.items():
             path = shutil.which(exe)
             result[key] = {"available": bool(path), "path": path}
         for capability, env_name in cls.ADAPTER_ENV.items():
-            command = os.environ.get(env_name)
             result[f"adapter:{capability}"] = {
-                "available": bool(command),
-                "command": command,
+                "available": bool(os.environ.get(env_name)),
+                "configured": bool(os.environ.get(env_name)),
                 "env": env_name,
             }
         return result
@@ -56,6 +56,11 @@ class ToolRegistry:
         native: list[str] = []
         provider_tools: list[str] = []
 
+        def adapter_command(capability: str) -> str | None:
+            env_name = cls.ADAPTER_ENV[capability]
+            value = os.environ.get(env_name)
+            return value if value else None
+
         for capability in requested:
             if capability in cls.CORE_NATIVE:
                 native.append(capability)
@@ -68,16 +73,16 @@ class ToolRegistry:
                     native.append("web")
                     provider_tools.extend(["WebSearch", "WebFetch"])
                     continue
-                adapter = discovered.get("adapter:web", {})
-                if adapter.get("available"):
-                    adapters["web"] = str(adapter.get("command"))
+                command = adapter_command("web")
+                if command:
+                    adapters["web"] = command
                 else:
                     missing.append("web")
                 continue
             if capability in {"image", "video", "voice"}:
-                adapter = discovered.get(f"adapter:{capability}", {})
-                if adapter.get("available"):
-                    adapters[capability] = str(adapter.get("command"))
+                command = adapter_command(capability)
+                if command:
+                    adapters[capability] = command
                 else:
                     missing.append(capability)
                 continue
@@ -96,6 +101,8 @@ class ToolRegistry:
             "native": sorted(set(native)),
             "provider_tools": sorted(set(provider_tools)),
             "selected": selected,
+            # Adapter command strings are runtime-only and must not be written to
+            # project manifests, reports, or evidence.
             "adapters": adapters,
             "missing": sorted(set(missing)),
         }
@@ -113,5 +120,6 @@ class ToolRouter:
         provider: str | None = None,
         context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        del role, context
         requested = list(dict.fromkeys((agent.get("tools") or []) + (task.get("tools") or [])))
         return ToolRegistry.resolve(requested, self.discovered, provider=provider)
