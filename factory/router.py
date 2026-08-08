@@ -37,10 +37,13 @@ class AdaptiveRouter:
         return [k for k,v in self.providers.items() if v.get("available") and v.get("authenticated") is not False]
 
     def _default_assignment(self, role: str, policy: str, available: list[str], builder_provider: str|None) -> tuple[dict[str,Any],str|None]:
-        if role in {"builder","fixer","worker","integrator","content_producer","researcher"}:
+        # Web-grounded roles prefer Claude because AAH can explicitly expose Claude Code's WebSearch/WebFetch.
+        if role in {"researcher","fact_checker","content_strategist","content_evaluator"} and "claude" in available:
+            provider="claude"
+        elif role in {"builder","fixer","worker","integrator","content_producer"}:
             provider="codex" if "codex" in available else available[0]
             builder_provider=provider
-        elif role in {"evaluator","tester","task_evaluator","security_reviewer","final_reviewer","system_tester","content_evaluator","fact_checker"} and len(available)>1 and builder_provider:
+        elif role in {"evaluator","tester","task_evaluator","security_reviewer","final_reviewer","system_tester"} and len(available)>1 and builder_provider:
             provider=next(x for x in available if x!=builder_provider)
         else:
             provider="claude" if "claude" in available else available[0]
@@ -68,7 +71,6 @@ class AdaptiveRouter:
                     assignment["model"]=self._model_for(provider,role,policy)
             result[role]=assignment
 
-        # Cross-provider evaluator is preferred unless the operator explicitly overrode its provider.
         if "builder" in result and "evaluator" in result and len(available)>1 and "evaluator" not in overrides:
             if result["builder"]["provider"]==result["evaluator"]["provider"]:
                 provider=next(x for x in available if x!=result["builder"]["provider"])
@@ -78,7 +80,7 @@ class AdaptiveRouter:
     @staticmethod
     def _model_for(provider: str, role: str, policy: str) -> str|None:
         if provider=="claude":
-            if policy=="quality" and role in {"planner","architect","security_reviewer","final_reviewer"}:
+            if policy=="quality" and role in {"planner","architect","security_reviewer","final_reviewer","researcher","fact_checker"}:
                 return "opus"
             return "sonnet"
         return None
