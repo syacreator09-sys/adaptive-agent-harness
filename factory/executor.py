@@ -7,7 +7,7 @@ from .providers import ProviderRegistry
 from .tools import ToolRouter
 from .envs import EnvRouter
 
-OUTPUT_CONTRACT = "Return one JSON object with summary (string), artifacts (filename->text/JSON), and evidence (array). You may also return role-specific top-level machine-readable keys explicitly named in your Outputs contract (for example task_result). Never include secret values. Product source changes belong in the working tree, not in artifacts."
+OUTPUT_CONTRACT = "Return one JSON object with summary (string), artifacts (filename->text/JSON), and evidence (array). Every evidence item used to support PASS must include a stable id or type, explicit ok:true/false, and a concise detail/source. You may also return role-specific top-level machine-readable keys explicitly named in your Outputs contract (for example task_result). Never include secret values. Product source changes belong in the working tree, not in artifacts."
 
 
 class AgentExecutor:
