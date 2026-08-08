@@ -10,11 +10,13 @@ class TaskGraphTests(unittest.TestCase):
         ]})
         self.assertEqual([x["id"] for x in graph.order()],["A","B"])
 
-    def test_empty_missing_id_and_missing_acceptance_fail_closed(self):
+    def test_empty_missing_id_missing_acceptance_and_unsafe_id_fail_closed(self):
         for payload in [
             {"tasks":[]},
             {"tasks":[{"profile":"lite","depends_on":[],"acceptance":["x"]}]},
             {"tasks":[{"id":"A","profile":"lite","depends_on":[]}]},
+            {"tasks":[{"id":"../../escape","profile":"lite","depends_on":[],"acceptance":["x"]}]},
+            {"tasks":[{"id":"bad/id","profile":"lite","depends_on":[],"acceptance":["x"]}]},
         ]:
             with self.subTest(payload=payload), self.assertRaises(TaskGraphError):
                 TaskGraph(payload)
