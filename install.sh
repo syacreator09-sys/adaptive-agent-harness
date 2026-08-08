@@ -33,7 +33,6 @@ RUNTIME="$AAH/runtime"
 BIN="$AAH/bin"
 mkdir -p "$AAH" "$BIN"
 
-# Atomic-ish runtime replacement: stage the complete runtime first, then swap.
 rm -rf "$RUNTIME.new"
 mkdir -p "$RUNTIME.new"
 cp -R "$ROOT/factory" "$RUNTIME.new/factory"
@@ -44,7 +43,19 @@ cat > "$BIN/factory" <<WRAP
 #!/usr/bin/env bash
 set -euo pipefail
 export PYTHONPATH="$RUNTIME:\${PYTHONPATH:-}"
-exec "$PY" -m factory.cli "\$@"
+case "\${1:-}" in
+  evidence-ingest)
+    shift
+    exec "$PY" -m factory.evidence_ingest_cli "\$@"
+    ;;
+  prepare-tasks)
+    shift
+    exec "$PY" -m factory.task_prepare_cli "\$@"
+    ;;
+  *)
+    exec "$PY" -m factory.cli "\$@"
+    ;;
+esac
 WRAP
 chmod +x "$BIN/factory"
 ln -sf factory "$BIN/aah"
@@ -66,23 +77,16 @@ exec "$PY" -m factory.tool_adapter_cli "\$@"
 WRAP
 chmod +x "$BIN/tool-adapter"
 
-# Git provides LITE's durable checkpoint/memory boundary. Never add existing
-# user files to a commit here; initialize only when the target has no repo.
 if command -v git >/dev/null 2>&1 && [ "${AAH_NO_GIT_INIT:-0}" != "1" ]; then
   if ! git -C "$TARGET" rev-parse --git-dir >/dev/null 2>&1; then
     git -C "$TARGET" init -q || true
   fi
 fi
 
-# Claude Code bridge: overwrite only AAH-owned agent/skill names. Unrelated
-# project agents, skills and CLAUDE.md remain untouched.
 mkdir -p "$TARGET/.claude/skills/aah" "$TARGET/.claude/agents"
 cp "$ROOT/.claude/skills/aah/SKILL.md" "$TARGET/.claude/skills/aah/SKILL.md"
 PYTHONPATH="$RUNTIME" "$PY" -m factory.agent_renderer "$TARGET/.claude/agents"
 
-# Install an idempotent PreToolUse hook without replacing existing hooks. If
-# settings are malformed, preserve them byte-for-byte and warn rather than
-# guessing a repair.
 "$PY" - "$TARGET" <<'PY'
 from pathlib import Path
 import json, sys
@@ -103,8 +107,6 @@ hooks[:]=[value for value in hooks if not is_aah(value)] + [entry]
 p.write_text(json.dumps(data,indent=2)+'\n',encoding='utf-8')
 PY
 
-# Add/update only the marked AAH block in AGENTS.md. Existing project guidance
-# stays before/after it. MCP credentials/configuration are never copied here.
 "$PY" - "$TARGET" <<'PY'
 from pathlib import Path
 import sys
@@ -123,7 +125,6 @@ else:
 p.write_text(text,encoding='utf-8')
 PY
 
-# Detect project/provider/tool/MCP capabilities and write only safe metadata.
 "$BIN/factory" setup --target "$TARGET" --non-interactive >/dev/null
 
 cat <<MSG
