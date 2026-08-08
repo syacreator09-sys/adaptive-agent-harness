@@ -28,7 +28,9 @@ if [ -d .github/workflows ] && find .github/workflows -type f -print -quit | gre
 fi
 
 step "legacy/source-reference hygiene"
-if grep -RniE 'santmun|santiago|repo de santi|harness de santi' README.md docs factory .claude scripts tests 2>/dev/null; then
+# Deliberately exclude this script because the forbidden words live in the
+# pattern itself. Current product/docs/tests must be clean.
+if grep -RniE 'santmun|santiago|repo de santi|harness de santi' README.md docs factory .claude tests 2>/dev/null; then
   fail "legacy external harness attribution/reference remains in current project files"
 fi
 
@@ -72,10 +74,10 @@ CAPS="$TARGET/.aah/capabilities.json"
 [ -f "$MANIFEST" ] && [ -f "$CAPS" ] || fail "safe capability manifests missing"
 grep -q 'DATABASE_URL' "$MANIFEST" || fail "env variable name not detected"
 grep -q 'docs' "$MANIFEST" || fail "MCP server name not detected"
-if grep -R -Fq 'postgres://release-check-secret' "$TARGET/.aah/project.json" "$TARGET/.aah/capabilities.json"; then
+if grep -R -Fq 'postgres://release-check-secret' "$MANIFEST" "$CAPS"; then
   fail "project secret value persisted"
 fi
-if grep -R -Fq 'release-check-mcp-secret' "$TARGET/.aah/project.json" "$TARGET/.aah/capabilities.json"; then
+if grep -R -Fq 'release-check-mcp-secret' "$MANIFEST" "$CAPS"; then
   fail "MCP secret value persisted"
 fi
 
