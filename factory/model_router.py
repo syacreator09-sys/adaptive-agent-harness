@@ -23,41 +23,45 @@ class ModelPlan:
         }
 
 
-# Preference orders, not availability claims. AAH falls back only on explicit
-# model-selection/access errors. Claude Code's own /model remains source of truth
-# for a given account; the ids below are current documented choices.
+# Claude Code documents the durable aliases `opus` and `sonnet`. Prefer those
+# rather than pinning a dated model id. This keeps the architecture stable while
+# allowing Claude Code to map the alias to the current model exposed by the
+# user's subscription. LITE intentionally preserves the proven split: strong
+# producer side with Opus, fresh independent evaluator with Sonnet.
 _CLAUDE: dict[str, dict[str, tuple[str, ...]]] = {
     "quality": {
-        "deep_reasoning": ("claude-opus-4-8", "claude-sonnet-5"),
-        "strong_coding": ("claude-opus-4-8", "claude-sonnet-5"),
-        "architecture_high": ("claude-opus-4-8", "claude-sonnet-5"),
-        "independent_review": ("claude-sonnet-5", "claude-opus-4-8"),
-        "fast_verification": ("claude-sonnet-5", "claude-opus-4-8"),
-        "security_review": ("claude-opus-4-8", "claude-sonnet-5"),
-        "integration_high": ("claude-opus-4-8", "claude-sonnet-5"),
+        "deep_reasoning": ("opus", "sonnet"),
+        "strong_coding": ("opus", "sonnet"),
+        "architecture_high": ("opus", "sonnet"),
+        "independent_review": ("sonnet", "opus"),
+        "fast_verification": ("sonnet", "opus"),
+        "security_review": ("opus", "sonnet"),
+        "integration_high": ("opus", "sonnet"),
     },
     "balanced": {
-        # LITE intentionally mirrors the proven split: high-reasoning producer
-        # side, then a fresh Sonnet-family evaluator.
-        "deep_reasoning": ("claude-opus-4-8", "claude-sonnet-5"),
-        "strong_coding": ("claude-opus-4-8", "claude-sonnet-5"),
-        "architecture_high": ("claude-opus-4-8", "claude-sonnet-5"),
-        "independent_review": ("claude-sonnet-5", "claude-opus-4-8"),
-        "fast_verification": ("claude-sonnet-5", "claude-opus-4-8"),
-        "security_review": ("claude-opus-4-8", "claude-sonnet-5"),
-        "integration_high": ("claude-opus-4-8", "claude-sonnet-5"),
+        "deep_reasoning": ("opus", "sonnet"),
+        "strong_coding": ("opus", "sonnet"),
+        "architecture_high": ("opus", "sonnet"),
+        "independent_review": ("sonnet", "opus"),
+        "fast_verification": ("sonnet", "opus"),
+        "security_review": ("opus", "sonnet"),
+        "integration_high": ("opus", "sonnet"),
     },
     "economy": {
-        "deep_reasoning": ("claude-sonnet-5", "claude-opus-4-8"),
-        "strong_coding": ("claude-sonnet-5", "claude-opus-4-8"),
-        "architecture_high": ("claude-sonnet-5", "claude-opus-4-8"),
-        "independent_review": ("claude-sonnet-5",),
-        "fast_verification": ("claude-sonnet-5",),
-        "security_review": ("claude-sonnet-5", "claude-opus-4-8"),
-        "integration_high": ("claude-sonnet-5", "claude-opus-4-8"),
+        "deep_reasoning": ("sonnet", "opus"),
+        "strong_coding": ("sonnet", "opus"),
+        "architecture_high": ("sonnet", "opus"),
+        "independent_review": ("sonnet",),
+        "fast_verification": ("sonnet",),
+        "security_review": ("sonnet", "opus"),
+        "integration_high": ("sonnet", "opus"),
     },
 }
 
+# GPT-5.6 tiers are available in Codex on eligible plans. Sol is the highest
+# capability tier, Terra balances capability/speed, and Luna is the fast tier.
+# A model-selection/access error falls back safely; ordinary execution errors do
+# not replay the task on another model.
 _OPENAI: dict[str, dict[str, tuple[str, ...]]] = {
     "quality": {
         "deep_reasoning": ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"),
