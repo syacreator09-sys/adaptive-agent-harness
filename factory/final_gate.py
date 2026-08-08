@@ -1,7 +1,7 @@
 from __future__ import annotations
 from pathlib import Path
 from typing import Any
-from .contracts import baseline_criteria, status_map, verify_contract, normalize_rubric
+from .contracts import baseline_criteria, status_map, verify_contract
 from .evidence import EvidenceStore
 
 
@@ -27,6 +27,12 @@ def _refs(item: dict[str, Any]) -> list[str]:
 
 
 class FinalGate:
+    """Fail-closed deterministic completion gate.
+
+    V2 requires a sealed SPEC/RUBRIC contract. Agent prose can never substitute
+    for a contract, criterion status, or explicit positive evidence.
+    """
+
     def __init__(self, run_dir: Path):
         self.run_dir = Path(run_dir)
 
@@ -36,28 +42,23 @@ class FinalGate:
         findings: Any = None,
         mandatory_gates: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
+        del rubric  # Acceptance is always read from the sealed runtime contract.
         failures: list[str] = []
-        contract_path = self.run_dir / "CONTRACT.json"
-        sealed = contract_path.exists()
-
-        if sealed:
-            contract_ok, contract_failures = verify_contract(self.run_dir)
-            if not contract_ok:
-                failures.extend(contract_failures)
-            criteria = baseline_criteria(self.run_dir)
-            statuses = status_map(self.run_dir)
-        else:
-            # Compatibility path for old runs/tests. New AAH runs seal a contract
-            # before any producer executes.
-            try:
-                criteria = normalize_rubric(rubric or [])
-            except Exception:
-                criteria = []
-            statuses = {
-                str(item.get("id")): item
-                for item in (rubric if isinstance(rubric, list) else [])
-                if isinstance(item, dict) and item.get("id")
+        sealed = (self.run_dir / "CONTRACT.json").exists()
+        if not sealed:
+            return {
+                "done": False,
+                "failures": ["contract:missing"],
+                "required": 0,
+                "passed": 0,
+                "contract_sealed": False,
             }
+
+        contract_ok, contract_failures = verify_contract(self.run_dir)
+        if not contract_ok:
+            failures.extend(contract_failures)
+        criteria = baseline_criteria(self.run_dir)
+        statuses = status_map(self.run_dir)
 
         required = [item for item in criteria if item.get("required", True)]
         if not criteria:
@@ -80,25 +81,30 @@ class FinalGate:
             criterion_id = str(baseline.get("id") or "unknown")
             status_row = statuses.get(criterion_id, {})
             status = str(status_row.get("status", "UNVERIFIED")).upper()
-            if status != "PASS":
+            criterion_ok = status == "PASS"
+            if not criterion_ok:
                 failures.append(f"{criterion_id}:status={status}")
-            else:
-                passed += 1
 
             refs = _refs(status_row)
             if not refs:
                 failures.append(f"{criterion_id}:missing_evidence")
-                continue
-            for ref in refs:
-                matched = by_ref.get(ref, [])
-                if not matched:
-                    failures.append(f"{criterion_id}:invalid_evidence:{ref}")
-                    continue
-                if any(record.get("ok") is False for record in matched):
-                    failures.append(f"{criterion_id}:failed_evidence:{ref}")
-                    continue
-                if not any(record.get("ok") is True for record in matched):
-                    failures.append(f"{criterion_id}:unverified_evidence:{ref}")
+                criterion_ok = False
+            else:
+                for ref in refs:
+                    matched = by_ref.get(ref, [])
+                    if not matched:
+                        failures.append(f"{criterion_id}:invalid_evidence:{ref}")
+                        criterion_ok = False
+                        continue
+                    if any(record.get("ok") is False for record in matched):
+                        failures.append(f"{criterion_id}:failed_evidence:{ref}")
+                        criterion_ok = False
+                        continue
+                    if not any(record.get("ok") is True for record in matched):
+                        failures.append(f"{criterion_id}:unverified_evidence:{ref}")
+                        criterion_ok = False
+            if criterion_ok:
+                passed += 1
 
         for finding in normalize_findings(findings or []):
             if (
@@ -117,5 +123,5 @@ class FinalGate:
             "failures": failures,
             "required": len(required),
             "passed": passed,
-            "contract_sealed": sealed,
+            "contract_sealed": True,
         }
