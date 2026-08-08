@@ -33,6 +33,14 @@ def is_model_selection_error(exc: Exception | str) -> bool:
     return any(hint in text for hint in _MODEL_ERROR_HINTS)
 
 
+def _provider_timeout() -> int:
+    try:
+        value = int(os.environ.get("AAH_PROVIDER_TIMEOUT_SECONDS", "1800"))
+    except ValueError:
+        value = 1800
+    return max(30, min(value, 14400))
+
+
 class BaseProvider:
     name = "base"
 
@@ -45,6 +53,8 @@ class BaseProvider:
         guardian: str = "guarded",
         access: str = "workspace-write",
         env: dict[str, str] | None = None,
+        effort: str | None = None,
+        mcp: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         raise NotImplementedError
 
@@ -55,21 +65,60 @@ class ClaudeProvider(BaseProvider):
     def __init__(self, subscription_only: bool = True):
         self.env_router = EnvRouter(subscription_only)
 
-    def run(self, prompt, cwd, model=None, tools=None, guardian="guarded", access="workspace-write", env=None):
+    def run(
+        self,
+        prompt,
+        cwd,
+        model=None,
+        tools=None,
+        guardian="guarded",
+        access="workspace-write",
+        env=None,
+        effort=None,
+        mcp=None,
+    ):
         cmd = ["claude", "-p", prompt, "--output-format", "json", "--no-session-persistence"]
         if model:
             cmd += ["--model", model]
-        if tools:
-            tool_list = ",".join(tools)
-            cmd += ["--tools", tool_list, "--allowedTools", *tools]
+        if effort in {"low", "medium", "high", "xhigh", "max"}:
+            cmd += ["--effort", effort]
+
+        # --tools controls built-in tools only. Pass an explicit empty string so
+        # a role with no built-in tools cannot silently regain Claude defaults.
+        builtin_tools = list(tools or [])
+        cmd += ["--tools", ",".join(builtin_tools)]
+
+        mcp = mcp or {}
+        selected_mcp = [str(name) for name in mcp.get("selected", []) if name]
+        allowed = list(builtin_tools)
+        if selected_mcp:
+            config = mcp.get("project_mcp_config")
+            if not config:
+                raise ProviderError("Claude MCP requested but project .mcp.json is unavailable")
+            cmd += ["--strict-mcp-config", "--mcp-config", str(config)]
+            allowed.extend(f"mcp__{name}__*" for name in selected_mcp)
+            denied = [f"mcp__{name}__*" for name in mcp.get("unselected", []) if name]
+            if denied:
+                cmd += ["--disallowedTools", *denied]
+        else:
+            # Claude docs define strict MCP mode without --mcp-config as a way
+            # to prevent project/user MCP servers from loading for this run.
+            cmd += ["--strict-mcp-config"]
+
+        if allowed:
+            cmd += ["--allowedTools", *allowed]
         cmd += ["--permission-mode", "dontAsk"]
-        cp = subprocess.run(
-            cmd,
-            cwd=str(cwd),
-            env=env or self.env_router.sanitize_provider_env(),
-            text=True,
-            capture_output=True,
-        )
+        try:
+            cp = subprocess.run(
+                cmd,
+                cwd=str(cwd),
+                env=env or self.env_router.sanitize_provider_env(),
+                text=True,
+                capture_output=True,
+                timeout=_provider_timeout(),
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise ProviderError(f"claude timed out after {_provider_timeout()} seconds") from exc
         if cp.returncode != 0:
             raise ProviderError(cp.stderr.strip() or cp.stdout.strip() or f"claude exited {cp.returncode}")
         try:
@@ -120,21 +169,39 @@ class CodexProvider(BaseProvider):
                     return candidate
         return text
 
-    def run(self, prompt, cwd, model=None, tools=None, guardian="guarded", access="workspace-write", env=None):
+    def run(
+        self,
+        prompt,
+        cwd,
+        model=None,
+        tools=None,
+        guardian="guarded",
+        access="workspace-write",
+        env=None,
+        effort=None,
+        mcp=None,
+    ):
         cmd = ["codex", "exec", "--json", "--sandbox", access]
         if has_profiles(cwd):
             profile = "aah_readonly" if access == "read-only" else "aah_workspace"
             cmd += ["-c", f'default_permissions="{profile}"']
         if model:
             cmd += ["--model", model]
+        # Codex owns its MCP lifecycle through config.toml. AAH validates that
+        # required server names exist and puts only selected names in the agent
+        # context; it never rewrites user MCP credentials/config at runtime.
         cmd += [prompt]
-        cp = subprocess.run(
-            cmd,
-            cwd=str(cwd),
-            env=env or self.env_router.sanitize_provider_env(),
-            text=True,
-            capture_output=True,
-        )
+        try:
+            cp = subprocess.run(
+                cmd,
+                cwd=str(cwd),
+                env=env or self.env_router.sanitize_provider_env(),
+                text=True,
+                capture_output=True,
+                timeout=_provider_timeout(),
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise ProviderError(f"codex timed out after {_provider_timeout()} seconds") from exc
         if cp.returncode != 0:
             raise ProviderError(cp.stderr.strip() or cp.stdout.strip() or f"codex exited {cp.returncode}")
         text = self._agent_text(cp.stdout)
