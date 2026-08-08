@@ -55,6 +55,21 @@ class EvidenceStoreAppendTests(unittest.TestCase):
             row = ev.all()[0]
             self.assertNotIn("sk-abcdefghijklmnop", row["detail"])
 
+    def test_bare_string_record_does_not_crash(self):
+        """Real bug found live at PRO scale (plan AUTONOMÍA TOTAL A6,
+        2026-08-08, first-ever real PRO run, RUN-20260808-001): a PRO
+        evaluator's "evidence" list contained a bare string, not an
+        object -- record.get("id") crashed with AttributeError before
+        ever reaching the missing-id fallback, killing the whole run
+        with no FINAL_REPORT. A bare string is real content worth
+        keeping, not discarding."""
+        with tempfile.TemporaryDirectory() as d:
+            ev = EvidenceStore(Path(d))
+            ev.append("confirmed no hardcoded secrets in config.py")
+            row = ev.all()[0]
+            self.assertEqual(row["detail"], "confirmed no hardcoded secrets in config.py")
+            self.assertTrue(row["id"].startswith("E-auto-"))
+
 
 class RedactTests(unittest.TestCase):
     def test_redacts_key_value_pattern(self):

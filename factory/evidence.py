@@ -27,7 +27,7 @@ def redact(text: str) -> str:
 
 class EvidenceStore:
     def __init__(self, run_dir: Path): self.run_dir=Path(run_dir); self.path=self.run_dir/"EVIDENCE.jsonl"
-    def append(self, record: dict[str,Any]) -> None:
+    def append(self, record: dict[str,Any] | str) -> None:
         # A fresh agent occasionally returns a real, usable evidence
         # record without remembering the "id" field the RUBRIC->EVIDENCE
         # cross-reference needs -- that used to hard-crash the whole run
@@ -39,6 +39,21 @@ class EvidenceStore:
         # record twice yields the identical id instead of a random one
         # each time, which would otherwise let the same evidence silently
         # multiply under different ids.
+        #
+        # Found live at PRO scale (plan AUTONOMÍA TOTAL A6, 2026-08-08,
+        # first-ever real PRO run against cano-hermes-agentic-os,
+        # RUN-20260808-001): a PRO evaluator's "evidence" list contained a
+        # bare string, not an object -- `record.get("id")` crashed with
+        # AttributeError before ever reaching the missing-id fallback
+        # above, the exact same "gate/ingest crashes instead of
+        # degrading" failure class already fixed twice elsewhere
+        # (evidence-id itself, and final_gate.py's rubric/findings
+        # normalization) but never here at the entry point. A bare string
+        # is real content an agent wanted recorded (e.g. "confirmed no
+        # hardcoded secrets in config.py") -- worth keeping, not
+        # discarding, so it's wrapped rather than dropped.
+        if not isinstance(record, dict):
+            record = {"detail": str(record)}
         if not record.get("id"):
             record = dict(record)
             record["id"] = "E-auto-" + hashlib.sha256(
