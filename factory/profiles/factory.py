@@ -3,9 +3,10 @@ import json
 from pathlib import Path
 from typing import Any
 from ..models import Phase
-from ..domains import role_for
+from ..domains import role_for, gate_types
 from ..taskgraph import TaskGraph, TaskGraphError
-from ..contracts import seal_contract, baseline_criteria, status_map
+from ..contracts import baseline_criteria, status_map
+from ..task_contracts import seed_task_contract
 from ..evidence import EvidenceStore, redact_data
 from ..events import EventJournal
 from ..final_gate import FinalGate, normalize_findings
@@ -17,46 +18,29 @@ class FactoryRunner(BaseRunner):
     profile = "factory"
 
     @staticmethod
-    def _explicit_evidence_gate(result: dict[str, Any], name: str) -> dict[str, Any]:
-        evidence = [item for item in (result.get("evidence") or []) if isinstance(item, dict)]
+    def _typed_evidence_gate(
+        result: dict[str, Any],
+        name: str,
+        labels: set[str],
+    ) -> dict[str, Any]:
+        evidence = [
+            item for item in (result.get("evidence") or [])
+            if isinstance(item, dict)
+            and str(item.get("type") or item.get("kind") or "") in labels
+        ]
         explicit = [item.get("ok") for item in evidence if "ok" in item]
         return {"name": name, "ok": bool(explicit) and all(value is True for value in explicit)}
 
-    def _task_dir(self, run, task_id: str) -> Path:
-        path = run.run_dir / "tasks" / task_id
-        path.mkdir(parents=True, exist_ok=True)
-        (path / "reports").mkdir(exist_ok=True)
-        return path
-
     def _seed_task_contract(self, run, task: dict[str, Any]) -> Path:
-        task_dir = self._task_dir(run, task["id"])
-        if (task_dir / "CONTRACT.json").exists():
-            seal_contract(task_dir)
-            return task_dir
-        spec_lines = [
-            f"# TASK SPEC — {task['id']}", "",
-            f"## Objective\n{task.get('title') or task['id']}", "",
-            f"## Profile\n{task['profile'].upper()}", "", "## Scope",
-        ]
-        scope = task.get("scope") or []
-        spec_lines += [f"- {item}" for item in scope] if scope else ["- Use only the minimum project scope required by this task."]
-        spec_lines += ["", "## Dependencies"]
-        dependencies = task.get("depends_on") or []
-        spec_lines += [f"- {item}" for item in dependencies] if dependencies else ["- None"]
-        spec_lines += ["", "## Acceptance Criteria"]
-        rubric = []
-        for index, criterion in enumerate(task["acceptance"], start=1):
-            criterion_id = f"{task['id']}-R-{index:03d}"
-            spec_lines.append(f"- {criterion_id}: {criterion}")
-            rubric.append({"id": criterion_id, "required": True, "criterion": criterion})
-        spec = "\n".join(spec_lines) + "\n"
-        (task_dir / "TASK_SPEC.md").write_text(spec, encoding="utf-8")
-        (task_dir / "SPEC.md").write_text(spec, encoding="utf-8")
-        (task_dir / "RUBRIC.json").write_text(json.dumps({"criteria": rubric}, indent=2) + "\n", encoding="utf-8")
-        seal_contract(task_dir)
-        EventJournal(run.run_dir).append(
-            "TASK_CONTRACT_SEALED", task_id=task["id"], profile=task["profile"], criteria=len(rubric)
-        )
+        existed = (run.run_dir / "tasks" / task["id"] / "CONTRACT.json").exists()
+        task_dir = seed_task_contract(run.run_dir, task)
+        if not existed:
+            EventJournal(run.run_dir).append(
+                "TASK_CONTRACT_SEALED",
+                task_id=task["id"],
+                profile=task["profile"],
+                criteria=len(task["acceptance"]),
+            )
         return task_dir
 
     def _ingest_task(self, task_dir: Path, result: dict[str, Any], role: str) -> None:
@@ -79,18 +63,14 @@ class FactoryRunner(BaseRunner):
         }
         for raw_name, value in (result.get("artifacts") or {}).items():
             name = aliases.get(str(raw_name), str(raw_name))
-            if name in {"SPEC.md", "RUBRIC.json", "RUBRIC_BASELINE.json", "CONTRACT.json", "EVIDENCE.jsonl"}:
-                continue
             owners = allowed.get(name)
-            if owners is not None and role not in owners:
+            if owners is None or role not in owners:
                 continue
-            path = task_dir / name
-            path.parent.mkdir(parents=True, exist_ok=True)
             safe = redact_data(value)
             if isinstance(safe, (dict, list)):
-                path.write_text(json.dumps(safe, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
+                self.store.write_json(task_dir, name, safe)
             else:
-                path.write_text(str(safe) + ("" if str(safe).endswith("\n") else "\n"), encoding="utf-8")
+                self.store.write_text(task_dir, name, str(safe))
         store = EvidenceStore(task_dir)
         for record in result.get("evidence") or []:
             store.append(record)
@@ -168,7 +148,10 @@ class FactoryRunner(BaseRunner):
                 self._ingest_task(task_dir, worker, worker_role)
             else:
                 EventJournal(run.run_dir).append(
-                    "TASK_REVERIFY_WITHOUT_FIX", task_id=task_id, attempt=attempt, reason="no_actionable_findings"
+                    "TASK_REVERIFY_WITHOUT_FIX",
+                    task_id=task_id,
+                    attempt=attempt,
+                    reason="no_actionable_findings",
                 )
 
             mandatory: list[dict[str, Any]] = []
@@ -182,7 +165,11 @@ class FactoryRunner(BaseRunner):
                     ingest=False,
                 )
                 self._ingest_task(task_dir, test, tester_role)
-                last_technical = self._explicit_evidence_gate(test, "task_technical_tests")
+                last_technical = self._typed_evidence_gate(
+                    test,
+                    "task_technical_tests",
+                    gate_types(domain, "pro_test"),
+                )
                 mandatory.append(last_technical)
 
             evaluator_role = "task_evaluator" if domain in {"code", "operations"} else role_for(domain, "evaluator")
@@ -206,7 +193,13 @@ class FactoryRunner(BaseRunner):
                 "TASK_EVALUATED", task_id=task_id, attempt=attempt, profile=hinted, done=gate["done"]
             )
             if gate["done"]:
-                return {"ok": True, "task_id": task_id, "profile": hinted, "history": history, "task_dir": str(task_dir)}
+                return {
+                    "ok": True,
+                    "task_id": task_id,
+                    "profile": hinted,
+                    "history": history,
+                    "task_dir": str(task_dir),
+                }
 
         return {
             "ok": False,
@@ -247,14 +240,15 @@ class FactoryRunner(BaseRunner):
             return TaskGraph(raw)
         except Exception as exc:
             findings = self._findings(run)
-            findings.append({
-                "id": "F-TASK-GRAPH",
-                "severity": "major",
-                "status": "open",
-                "rubric_id": None,
-                "detail": f"Architect failed to produce a valid task graph: {exc}",
-            })
-            self.store.write_json(run.run_dir, "FINDINGS.json", findings)
+            if not any(str(item.get("id")) == "F-TASK-GRAPH" and str(item.get("status", "open")).lower() == "open" for item in findings):
+                findings.append({
+                    "id": "F-TASK-GRAPH",
+                    "severity": "major",
+                    "status": "open",
+                    "rubric_id": None,
+                    "detail": f"Architect failed to produce a valid task graph: {exc}",
+                })
+                self.store.write_json(run.run_dir, "FINDINGS.json", findings)
             EvidenceStore(run.run_dir).append(
                 {"id": "E-TASK-GRAPH", "type": "task_graph_validation", "ok": False, "detail": str(exc)}
             )
@@ -295,20 +289,26 @@ class FactoryRunner(BaseRunner):
                 self.store.write_json(run.run_dir, "TASK_OUTPUTS.json", task_outputs)
                 if not result["ok"]:
                     findings = self._findings(run)
-                    findings.append({
-                        "id": f"TASK-{task['id']}",
-                        "severity": "major",
-                        "status": "open",
-                        "rubric_id": None,
-                        "detail": "Task failed its independent sealed task harness",
-                    })
-                    self.store.write_json(run.run_dir, "FINDINGS.json", findings)
+                    finding_id = f"TASK-{task['id']}"
+                    if not any(str(item.get("id")) == finding_id and str(item.get("status", "open")).lower() == "open" for item in findings):
+                        findings.append({
+                            "id": finding_id,
+                            "severity": "major",
+                            "status": "open",
+                            "rubric_id": None,
+                            "detail": "Task failed its independent sealed task harness",
+                        })
+                        self.store.write_json(run.run_dir, "FINDINGS.json", findings)
                     gate = self._gate(run, [{"name": "task_graph", "ok": False}])
                     state.transition(Phase.PAUSED, status="incomplete", blocked_task=task["id"])
                     return self._write_report(
                         run,
                         gate,
-                        {"tasks_completed": len(completed_ids), "blocked_task": task["id"], "task_outputs": task_outputs},
+                        {
+                            "tasks_completed": len(completed_ids),
+                            "blocked_task": task["id"],
+                            "task_outputs": task_outputs,
+                        },
                     )
                 completed_ids.add(task["id"])
 
@@ -329,7 +329,11 @@ class FactoryRunner(BaseRunner):
                 {"mode": "system_test", "domain": domain, "profile": "factory"},
                 context,
             )
-            system_gate = self._explicit_evidence_gate(system_result, "system_test")
+            system_gate = self._typed_evidence_gate(
+                system_result,
+                "system_test",
+                gate_types(domain, "factory_system"),
+            )
 
             state.transition(Phase.EVALUATING)
             self._dispatch(
@@ -352,12 +356,9 @@ class FactoryRunner(BaseRunner):
                     {"mode": "security_review", "domain": domain, "profile": "factory"},
                     context,
                 )
-                security_evidence = [
-                    item for item in (security.get("evidence") or [])
-                    if isinstance(item, dict) and str(item.get("type") or item.get("kind")) == "security"
-                ]
-                explicit = [item.get("ok") for item in security_evidence if "ok" in item]
-                mandatory.append({"name": "security", "ok": bool(explicit) and all(value is True for value in explicit)})
+                mandatory.append(
+                    self._typed_evidence_gate(security, "security", {"security"})
+                )
 
             self._dispatch(
                 run,
@@ -371,7 +372,11 @@ class FactoryRunner(BaseRunner):
                 Phase.DONE if gate["done"] else Phase.PAUSED,
                 status="done" if gate["done"] else "incomplete",
             )
-            return self._write_report(run, gate, {"tasks": len(graph.tasks), "task_outputs": task_outputs})
+            return self._write_report(
+                run,
+                gate,
+                {"tasks": len(graph.tasks), "task_outputs": task_outputs},
+            )
         except AgentDispatchError as exc:
             return self._abort(run, state, exc, state.load().get("phase", "factory"))
         except Exception as exc:
