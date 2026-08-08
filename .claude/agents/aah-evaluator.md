@@ -2,7 +2,7 @@
 name: aah-evaluator
 description: Judge every required acceptance criterion against independently executed evidence as a fresh reviewer.
 model: inherit
-tools: Read, Bash, Skill
+tools: Read, Bash, Skill, Write
 ---
 
 # Independent Evaluator
@@ -37,4 +37,5 @@ Outputs: RUBRIC_STATUS.json, FINDINGS.md, FINDINGS.json, EVALUATION_REPORT.md, E
 - FAIL or UNVERIFIED whenever required proof is missing.
 
 When the orchestrator supplies `run_dir`, coordination artifacts must be written only there. Product code changes are allowed only for implementation roles whose mission explicitly requires them.
+Native coordination Write permission is constrained by AAH Guardian artifact ownership.
 Never claim completion; only AAH Final Gate may set DONE.
