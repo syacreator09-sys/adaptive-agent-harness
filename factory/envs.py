@@ -5,9 +5,10 @@ from typing import Mapping, Any
 
 
 SECRET_NAME = re.compile(
-    r"(KEY|TOKEN|SECRET|PASSWORD|PASSWD|PRIVATE|CREDENTIAL|COOKIE|SESSION|AUTH|JWT|DATABASE_URL|REDIS_URL|DSN|CONNECTION_STRING)",
+    r"(API[_-]?KEY|TOKEN|SECRET|PASSWORD|PASSWD|PRIVATE|CREDENTIAL|COOKIE|SESSION|AUTH|JWT|DATABASE_URL|REDIS_URL|DSN|CONNECTION_STRING)",
     re.I,
 )
+_SAFE_AMBIENT = {"SSH_AUTH_SOCK"}
 
 
 class EnvRouter:
@@ -30,6 +31,8 @@ class EnvRouter:
 
     @staticmethod
     def classify_name(name: str) -> str:
+        if name in _SAFE_AMBIENT:
+            return "config"
         return "secret" if SECRET_NAME.search(name) else "config"
 
     def scoped_provider_env(
@@ -39,18 +42,27 @@ class EnvRouter:
         task: dict[str, Any],
         source: Mapping[str, str] | None = None,
     ) -> dict[str, str]:
-        env = self.sanitize_provider_env(source)
+        source_env = dict(source or os.environ)
+        env = self.sanitize_provider_env(source_env)
         names = set(project.get("env_names") or [])
         classes = project.get("env_classes") or {}
-        explicit = set(task.get("required_env") or [])
+        explicit = set(task.get("required_env") or []) & names
 
-        # A task may request only variables the Project Adapter already discovered by
-        # name. Values remain in the process environment and are never copied to AAH artifacts.
-        explicit &= names
-        for name in names:
-            secret = classes.get(name) == "secret" or self.classify_name(name) == "secret"
-            if secret:
-                allowed = name in explicit and role not in self.REVIEW_ROLES
-                if not allowed:
-                    env.pop(name, None)
+        # Fail closed for ambient secrets too: reviewers never receive them and
+        # producers receive only project-known names explicitly requested by the
+        # task. This prevents a shell's unrelated DATABASE_URL/GITHUB_TOKEN/etc.
+        # from leaking into an agent just because it happened to be exported.
+        for name in list(env):
+            if self.classify_name(name) == "secret":
+                env.pop(name, None)
+
+        if role not in self.REVIEW_ROLES:
+            for name in explicit:
+                secret = classes.get(name) == "secret" or self.classify_name(name) == "secret"
+                if not secret:
+                    continue
+                if self.subscription_only and name in self.API_KEYS:
+                    continue
+                if name in source_env:
+                    env[name] = source_env[name]
         return env
