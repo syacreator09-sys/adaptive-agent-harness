@@ -18,6 +18,14 @@ _TOOL_MAP = {
     "shell": "Bash",
     "browser": "Skill",
 }
+# External provider tools stay minimal in AgentRegistry. Native Claude subagents
+# additionally need Write to deliver their own coordination artifacts. Guardian
+# enforces exact per-role filenames, so this does not grant reviewers permission
+# to modify product code or runtime-owned files.
+_NATIVE_COORDINATION_WRITERS = {
+    "planner", "architect", "tester", "evaluator", "task_evaluator",
+    "system_tester", "security_reviewer", "final_reviewer",
+}
 
 
 def render_agent(role: str, registry: AgentRegistry | None = None) -> str:
@@ -28,14 +36,13 @@ def render_agent(role: str, registry: AgentRegistry | None = None) -> str:
         mapped = _TOOL_MAP.get(tool)
         if mapped and mapped not in tools:
             tools.append(mapped)
+    if role in _NATIVE_COORDINATION_WRITERS and "Write" not in tools:
+        tools.append("Write")
     plan = ModelRouter.resolve("claude", agent.get("capability") or "strong_coding", "balanced")
     lines = [
         "---",
         f"name: aah-{role.replace('_', '-')}",
         f"description: {agent['mission']}",
-        # In native Claude Code mode, inherit is deliberately safer than pinning
-        # a model that may not exist on every subscription. The body records the
-        # recommended capability/model class for the orchestrator/user.
         "model: inherit",
     ]
     if tools:
@@ -58,6 +65,7 @@ def render_agent(role: str, registry: AgentRegistry | None = None) -> str:
         "",
         "When the orchestrator supplies `run_dir`, coordination artifacts must be written only there. "
         "Product code changes are allowed only for implementation roles whose mission explicitly requires them.",
+        "Native coordination Write permission is still constrained by AAH Guardian artifact ownership.",
         "Never claim completion; only AAH Final Gate may set DONE.",
     ]
     return "\n".join(lines) + "\n"
