@@ -7,8 +7,72 @@ from .artifacts import ArtifactStore
 from .final_gate import normalize_findings
 
 
+PROFILE_ORDER = ["lite", "pro", "factory"]
+
+
+def create_escalation_child(
+    target: Path | str,
+    parent_run_id: str,
+    next_profile: str,
+    request: str | None = None,
+    guardian: str | None = None,
+    domain: str | None = None,
+    failures: list[str] | None = None,
+):
+    """Create a fresh child run with artifact-only handoff.
+
+    SPEC and the acceptance baseline are carried forward. Evaluation status and
+    evidence are intentionally NOT inherited as proof, forcing fresh brains to
+    verify the child profile independently.
+    """
+    if next_profile not in PROFILE_ORDER:
+        raise ValueError(f"invalid escalation profile: {next_profile}")
+    store = ArtifactStore(Path(target).resolve())
+    parent = store.get_run(parent_run_id)
+    parent_request = store.read_json(parent.run_dir, "REQUEST.json", {}) or {}
+    from_profile = str(parent_request.get("profile") or "lite")
+    if from_profile in PROFILE_ORDER and PROFILE_ORDER.index(next_profile) <= PROFILE_ORDER.index(from_profile):
+        raise ValueError(f"escalation must move upward: {from_profile} -> {next_profile}")
+
+    request = request if request is not None else str(parent_request.get("request") or "")
+    guardian = guardian if guardian is not None else str(parent_request.get("guardian") or "guarded")
+    domain = domain if domain is not None else str(parent_request.get("domain") or "code")
+    child = store.create_run(request, next_profile, guardian, domain)
+
+    spec = parent.run_dir / "SPEC.md"
+    if spec.exists():
+        store.write_text(child.run_dir, "SPEC.md", spec.read_text(encoding="utf-8"))
+
+    baseline = store.read_json(parent.run_dir, "RUBRIC_BASELINE.json", None)
+    if baseline is None:
+        baseline = store.read_json(parent.run_dir, "RUBRIC.json", None)
+    if baseline is not None:
+        store.write_json(child.run_dir, "RUBRIC.json", baseline)
+
+    findings = normalize_findings(store.read_json(parent.run_dir, "FINDINGS.json", []))
+    if findings:
+        store.write_json(child.run_dir, "FINDINGS.json", findings)
+
+    context = {
+        "parent_run_id": parent_run_id,
+        "from_profile": from_profile,
+        "to_profile": next_profile,
+        "failures": list(failures or []),
+        "open_findings": [
+            item for item in findings
+            if str(item.get("status", "open")).lower() == "open"
+        ],
+        "evidence_inherited_as_proof": False,
+        "rubric_status_reset": True,
+        "fresh_child_run": True,
+    }
+    store.write_json(child.run_dir, "PARENT_RUN.json", {"parent_run_id": parent_run_id})
+    store.write_json(child.run_dir, "ESCALATION_CONTEXT.json", context)
+    return child
+
+
 class AutoOrchestrator:
-    ORDER = ["lite", "pro", "factory"]
+    ORDER = PROFILE_ORDER
     RUNNERS = {"lite": LiteRunner, "pro": ProRunner, "factory": FactoryRunner}
 
     def __init__(
@@ -34,48 +98,6 @@ class AutoOrchestrator:
             kwargs["max_passes"] = int(self.limits.get("max_pro_passes", 5))
         return runner.run(request, **kwargs)
 
-    def _seed_child(
-        self,
-        parent_run_id: str,
-        next_profile: str,
-        request: str,
-        guardian: str,
-        domain: str,
-        failures: list[str] | None = None,
-    ):
-        parent = self.store.get_run(parent_run_id)
-        child = self.store.create_run(request, next_profile, guardian, domain)
-
-        spec = parent.run_dir / "SPEC.md"
-        if spec.exists():
-            self.store.write_text(child.run_dir, "SPEC.md", spec.read_text(encoding="utf-8"))
-
-        baseline = self.store.read_json(parent.run_dir, "RUBRIC_BASELINE.json", None)
-        if baseline is None:
-            baseline = self.store.read_json(parent.run_dir, "RUBRIC.json", None)
-        if baseline is not None:
-            self.store.write_json(child.run_dir, "RUBRIC.json", baseline)
-
-        findings = normalize_findings(self.store.read_json(parent.run_dir, "FINDINGS.json", []))
-        if findings:
-            self.store.write_json(child.run_dir, "FINDINGS.json", findings)
-
-        context = {
-            "parent_run_id": parent_run_id,
-            "from_profile": self.store.read_json(parent.run_dir, "REQUEST.json", {}).get("profile"),
-            "to_profile": next_profile,
-            "failures": list(failures or []),
-            "open_findings": [
-                item for item in findings
-                if str(item.get("status", "open")).lower() == "open"
-            ],
-            "evidence_inherited_as_proof": False,
-            "rubric_status_reset": True,
-        }
-        self.store.write_json(child.run_dir, "PARENT_RUN.json", {"parent_run_id": parent_run_id})
-        self.store.write_json(child.run_dir, "ESCALATION_CONTEXT.json", context)
-        return child
-
     def run(self, request: str, domain="code", profile="auto", guardian="auto") -> dict[str, Any]:
         route = self.router.route(request)
         current = route["profile"] if profile == "auto" else profile
@@ -99,12 +121,13 @@ class AutoOrchestrator:
                 result["route"] = route
                 return result
 
-            child = self._seed_child(
+            child = create_escalation_child(
+                self.target,
                 current_run_id,
                 next_profile,
-                request,
-                guard,
-                domain,
+                request=request,
+                guardian=guard,
+                domain=domain,
                 failures=(result.get("gate") or {}).get("failures", []),
             )
             run_id = child.run_id
