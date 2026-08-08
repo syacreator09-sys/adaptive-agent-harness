@@ -18,15 +18,17 @@ class DiscoveryTests(unittest.TestCase):
             (p / "pyproject.toml").write_text('[project]\nname="x"\n')
             (p / "Dockerfile").write_text('FROM python:3.12')
             (p / "CLAUDE.md").write_text('rules')
-            (p / ".env").write_text('SECRET_TOKEN=abc\nPUBLIC_URL=https://x\n# comment\n')
+            (p / ".env").write_text('SECRET_TOKEN=abc\nDATABASE_URL=postgres://user:pass@db/x\nPUBLIC_URL=https://x\n# comment\n')
             manifest = ProjectAdapter(p).inspect()
             self.assertIn("node", manifest["stacks"])
             self.assertIn("python", manifest["stacks"])
             self.assertIn("docker", manifest["stacks"])
             self.assertIn("CLAUDE.md", manifest["instruction_files"])
             self.assertIn("SECRET_TOKEN", manifest["env_names"])
+            self.assertEqual(manifest["env_classes"]["DATABASE_URL"],"secret")
             text = str(manifest)
             self.assertNotIn("abc", text)
+            self.assertNotIn("user:pass",text)
 
     def test_subscription_env_removes_api_keys(self):
         env = {"PATH":"/bin", "HOME":"/tmp", "ANTHROPIC_API_KEY":"a", "OPENAI_API_KEY":"b", "SAFE":"yes"}
@@ -36,15 +38,20 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual(sanitized["PATH"], "/bin")
 
     def test_review_roles_never_receive_project_secret_values(self):
-        env={"SECRET_TOKEN":"value","PUBLIC_URL":"https://x","PATH":"/bin"}
-        project={"env_names":["SECRET_TOKEN","PUBLIC_URL"],"env_classes":{"SECRET_TOKEN":"secret","PUBLIC_URL":"config"}}
+        env={"SECRET_TOKEN":"value","DATABASE_URL":"postgres://secret","PUBLIC_URL":"https://x","PATH":"/bin"}
+        project={
+            "env_names":["SECRET_TOKEN","DATABASE_URL","PUBLIC_URL"],
+            "env_classes":{"SECRET_TOKEN":"secret","DATABASE_URL":"secret","PUBLIC_URL":"config"},
+        }
         router=EnvRouter(subscription_only=True)
-        for role in ["tester","evaluator","task_evaluator","system_tester","security_reviewer"]:
-            scoped=router.scoped_provider_env(project,role,{"required_env":["SECRET_TOKEN"]},env)
+        for role in ["tester","evaluator","task_evaluator","system_tester","security_reviewer","researcher","content_strategist"]:
+            scoped=router.scoped_provider_env(project,role,{"required_env":["SECRET_TOKEN","DATABASE_URL"]},env)
             self.assertNotIn("SECRET_TOKEN",scoped)
+            self.assertNotIn("DATABASE_URL",scoped)
             self.assertEqual(scoped["PUBLIC_URL"],"https://x")
         builder=router.scoped_provider_env(project,"builder",{"required_env":["SECRET_TOKEN"]},env)
         self.assertEqual(builder["SECRET_TOKEN"],"value")
+        self.assertNotIn("DATABASE_URL",builder)
 
     def test_tool_registry_and_provider_discovery_are_adaptive(self):
         def fake_which(name):
@@ -57,4 +64,6 @@ class DiscoveryTests(unittest.TestCase):
         self.assertTrue(providers["claude"]["available"])
         self.assertFalse(providers["codex"]["available"])
 
-if __name__ == "__main__": unittest.main()
+
+if __name__ == "__main__":
+    unittest.main()
