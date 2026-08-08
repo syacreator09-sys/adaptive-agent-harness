@@ -8,7 +8,7 @@ from typing import Any
 
 
 _SECRET_KEY = re.compile(
-    r"(api[_-]?key|token|secret|password|passwd|private|credential|cookie|session|authorization|database[_-]?url|dsn|jwt)",
+    r"(api[_-]?key|token|secret|password|passwd|private|credential|cookie|authorization|database[_-]?url|dsn|jwt|session[_-]?(?:token|secret|key|cookie))",
     re.I,
 )
 _INLINE_PATTERNS = [
@@ -38,6 +38,8 @@ def redact_text(text: str) -> str:
 
 
 def redact_data(value: Any, key: str | None = None) -> Any:
+    # Audit identifiers such as `session`/`session_id` are intentionally kept;
+    # credentials named session_token/session_secret are not.
     if key and _SECRET_KEY.search(key):
         return "[REDACTED]"
     if isinstance(value, dict):
@@ -73,6 +75,7 @@ class EvidenceStore:
         with self.path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(safe, sort_keys=True, default=str) + "\n")
             handle.flush()
+            os.fsync(handle.fileno())
         return safe
 
     def all(self) -> list[dict[str, Any]]:
@@ -90,16 +93,14 @@ class EvidenceStore:
                     raise ValueError("evidence row is not an object")
                 rows.append(value)
             except Exception as exc:
-                rows.append(
-                    {
-                        "id": f"E-invalid-line-{index}",
-                        "type": "invalid_evidence_jsonl",
-                        "ok": False,
-                        "_invalid": True,
-                        "line": index,
-                        "error": type(exc).__name__,
-                    }
-                )
+                rows.append({
+                    "id": f"E-invalid-line-{index}",
+                    "type": "invalid_evidence_jsonl",
+                    "ok": False,
+                    "_invalid": True,
+                    "line": index,
+                    "error": type(exc).__name__,
+                })
         return rows
 
     def ids(self) -> set[str]:
