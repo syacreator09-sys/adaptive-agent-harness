@@ -4,6 +4,7 @@ from pathlib import Path
 from factory.final_gate import FinalGate
 from factory.evidence import EvidenceStore
 
+
 class FinalGateTests(unittest.TestCase):
     def test_unverified_never_passes(self):
         with tempfile.TemporaryDirectory() as td:
@@ -14,7 +15,7 @@ class FinalGateTests(unittest.TestCase):
             result = FinalGate(run).evaluate(rubric, findings=[])
             self.assertFalse(result["done"])
 
-    def test_pass_requires_real_evidence_and_no_major_findings(self):
+    def test_pass_requires_real_positive_evidence_and_no_major_findings(self):
         with tempfile.TemporaryDirectory() as td:
             run = Path(td)
             ev = EvidenceStore(run)
@@ -26,12 +27,6 @@ class FinalGateTests(unittest.TestCase):
             self.assertFalse(result2["done"])
 
     def test_rubric_wrapped_in_criteria_dict_does_not_crash(self):
-        """Real bug found live (plan AUTONOMÍA TOTAL, 2026-08-07,
-        RUN-20260807-004): a real evaluator wrote RUBRIC.json as
-        {"criteria": [...]} instead of a bare list -- `for item in rubric`
-        iterated the dict's string keys and crashed with AttributeError
-        on item.get(...), killing the whole run before FINAL_REPORT was
-        ever written."""
         with tempfile.TemporaryDirectory() as td:
             run = Path(td)
             ev = EvidenceStore(run)
@@ -47,19 +42,31 @@ class FinalGateTests(unittest.TestCase):
             self.assertFalse(result["done"])
             self.assertIn("R-1:status=UNVERIFIED", result["failures"])
 
-    def test_evidence_ref_key_and_type_based_reference_are_admissible(self):
-        """A real evaluator referenced evidence by its record "type"
-        (e.g. "unittest_run") under the key "evidence_ref", not by the
-        EvidenceStore's own auto-derived "id" under "evidence" -- neither
-        agents.py nor the .claude/agents/*.md contracts pin the exact
-        field name or reference scheme, and the type-based reference
-        does resolve to a real, admissible EVIDENCE.jsonl record."""
+    def test_evidence_ref_key_and_type_based_reference_are_admissible_when_positive(self):
         with tempfile.TemporaryDirectory() as td:
             run = Path(td)
             ev = EvidenceStore(run)
-            ev.append({"kind":"test","type":"unittest_run","detail":"OK"})
+            ev.append({"kind":"test","type":"unittest_run","ok":True,"detail":"OK"})
             rubric = [{"id":"R-1","status":"PASS","required":True,"evidence_ref":["unittest_run"]}]
             result = FinalGate(run).evaluate(rubric, findings=[])
             self.assertTrue(result["done"])
 
-if __name__ == "__main__": unittest.main()
+    def test_narrative_evidence_without_ok_never_supports_pass(self):
+        with tempfile.TemporaryDirectory() as td:
+            run=Path(td)
+            EvidenceStore(run).append({"id":"E-1","detail":"looks good"})
+            rubric=[{"id":"R-1","status":"PASS","required":True,"evidence":["E-1"]}]
+            result=FinalGate(run).evaluate(rubric,[])
+            self.assertFalse(result["done"])
+            self.assertIn("R-1:unverified_evidence:E-1",result["failures"])
+
+    def test_empty_or_all_optional_rubric_never_completes(self):
+        with tempfile.TemporaryDirectory() as td:
+            run=Path(td)
+            self.assertFalse(FinalGate(run).evaluate([],[])["done"])
+            optional=[{"id":"R-opt","required":False,"status":"PASS","evidence":[]}]
+            self.assertFalse(FinalGate(run).evaluate(optional,[])["done"])
+
+
+if __name__ == "__main__":
+    unittest.main()
