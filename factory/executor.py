@@ -40,8 +40,6 @@ class AgentExecutor:
         context: dict[str, Any],
         session: str | None = None,
     ) -> dict[str, Any]:
-        # Every dispatch gets a fresh AAH session id. Provider adapters are also
-        # invoked as fresh non-persistent CLI processes.
         session = session or str(uuid.uuid4())
         agent = self.registry.get(role)
         assignment = dict(self.assignments.get(role, {}))
@@ -49,7 +47,13 @@ class AgentExecutor:
         if provider_name in {None, "none"}:
             raise RuntimeError(f"No provider available for {role}")
 
-        resolution = self.tool_router.for_agent(agent, task)
+        resolution = self.tool_router.for_agent(
+            role,
+            agent,
+            task,
+            provider=provider_name,
+            context=context,
+        )
         required = set(task.get("required_tools") or [])
         missing_required = required.intersection(resolution["missing"])
         if missing_required:
@@ -61,7 +65,7 @@ class AgentExecutor:
         enriched["agent_role"] = role
         provider = ProviderRegistry.build(provider_name, self.subscription_only)
         prompt = self._prompt(role, agent, task, enriched)
-        tools = self._provider_tools(resolution.get("native", []), provider_name)
+        tools = self._provider_tools(resolution, provider_name)
         access = "workspace-write" if any(item in resolution.get("native", []) for item in ["edit", "write"]) else "read-only"
         env = EnvRouter(self.subscription_only).scoped_provider_env(context.get("project", {}), role, task)
         env["AAH_GUARDIAN_MODE"] = str(context.get("guardian", "guarded"))
@@ -75,8 +79,6 @@ class AgentExecutor:
         candidates: list[str | None] = list(dict.fromkeys(configured))
         if assignment.get("model") and assignment["model"] not in candidates:
             candidates.insert(0, assignment["model"])
-        # CLI default is the final compatibility fallback when named recommended
-        # models are not exposed by this subscription/version.
         candidates.append(None)
 
         last_error: Exception | None = None
@@ -127,7 +129,7 @@ class AgentExecutor:
         return result
 
     @staticmethod
-    def _provider_tools(tools: list[str], provider: str) -> list[str]:
+    def _provider_tools(resolution: dict[str, Any], provider: str) -> list[str]:
         if provider != "claude":
             return []
         mapping = {
@@ -138,7 +140,9 @@ class AgentExecutor:
             "write": "Write",
             "shell": "Bash",
         }
-        return sorted({mapping[item] for item in tools if item in mapping})
+        tools = {mapping[item] for item in resolution.get("native", []) if item in mapping}
+        tools.update(str(item) for item in resolution.get("provider_tools", []) if item)
+        return sorted(tools)
 
     @staticmethod
     def _prompt(role, agent, task, context):
