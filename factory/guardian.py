@@ -1,4 +1,5 @@
 from __future__ import annotations
+import posixpath
 import re
 from dataclasses import dataclass
 from enum import Enum
@@ -154,16 +155,36 @@ class Guardian:
 
     @staticmethod
     def _resolve_inside(path: str, root: str | None) -> tuple[Path | None, str | None]:
-        if not path or not root:
+        # Real regression found live (2026-08-08, rebasing
+        # hardening/lite-pro-factory-v2 onto main): `root` is
+        # typed `str | None = None` on can_write/can_read, but this used
+        # to hard-require it (`if not path or not root: return None,
+        # None`), which both callers signatures and this class's own
+        # role-based logic (ROLE_RUN_WRITES, ARTIFACT_ONLY_ROLES etc. --
+        # all keyed off the *relative* .aah/runs/... path, not an
+        # absolute root) never actually needed. Every real production
+        # caller (hook_guardian.py) does pass root, so this didn't show
+        # up live, but any direct call without one (this class's own
+        # test suite included) silently failed closed regardless of the
+        # real role/path -- degrading gracefully to "treat path as
+        # already relative" instead, matching the pre-rewrite behavior.
+        if not path:
             return None, None
-        root_path = Path(root).resolve()
         raw = Path(path)
-        resolved = (raw if raw.is_absolute() else root_path / raw).resolve()
-        try:
-            relative = resolved.relative_to(root_path)
-        except ValueError:
-            return resolved, None
-        return resolved, relative.as_posix()
+        if root:
+            root_path = Path(root).resolve()
+            resolved = (raw if raw.is_absolute() else root_path / raw).resolve()
+            try:
+                relative = resolved.relative_to(root_path)
+            except ValueError:
+                return resolved, None
+            return resolved, relative.as_posix()
+        if raw.is_absolute():
+            return raw, None
+        normalized = posixpath.normpath(raw.as_posix())
+        if normalized == ".." or normalized.startswith("../"):
+            return raw, None
+        return raw, normalized
 
     @staticmethod
     def _env_path(relative: str) -> bool:
