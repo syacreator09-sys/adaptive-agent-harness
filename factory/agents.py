@@ -12,6 +12,27 @@ BASE_RULES = [
     "Respect the existing project's instructions and structure unless the sealed SPEC explicitly changes them.",
 ]
 
+RUBRIC_SCHEMA_RULE = (
+    'Write RUBRIC.json in exactly this canonical shape: '
+    '{"criteria":[{"id":"R-001","required":true,"criterion":"binary measurable condition",'
+    '"verification":"optional concrete check"}]}. Use unique stable ids and no verdict/status fields in the planning rubric.'
+)
+STATUS_SCHEMA_RULE = (
+    'Write RUBRIC_STATUS.json in exactly this canonical shape: '
+    '{"criteria":[{"id":"R-001","status":"PASS|FAIL|UNVERIFIED","evidence":["E-R-001-P1"]}]}. '
+    'Criterion ids must come from RUBRIC_BASELINE and evidence entries must be stable evidence IDs, never semantic type names.'
+)
+FINDINGS_SCHEMA_RULE = (
+    'Write FINDINGS.json as a JSON array only: '
+    '[{"id":"F-001","severity":"critical|major|minor|info","status":"open|resolved",'
+    '"rubric_id":"R-001 or null","detail":"observed failure and expected behavior"}]. '
+    'Preserve finding ids across passes.'
+)
+EVIDENCE_SCHEMA_RULE = (
+    'Every evidence record must have a stable unique id, semantic type, explicit boolean ok, and concise detail/source; '
+    'rubric status references the evidence id.'
+)
+
 
 def A(identity, mission, capability, tools, inputs, outputs, rules=None):
     return {
@@ -38,6 +59,7 @@ BUILTIN_AGENTS: dict[str, dict[str, Any]] = {
             "Do not ask the Builder to decide requirements that can be resolved as explicit assumptions.",
             "Every required rubric criterion must be objectively pass/fail and have a stable unique id.",
             "RUBRIC.json must contain the same acceptance intent expressed in SPEC.md.",
+            RUBRIC_SCHEMA_RULE,
         ],
     ),
     "architect": A(
@@ -79,6 +101,7 @@ BUILTIN_AGENTS: dict[str, dict[str, Any]] = {
             "Do not modify product code or requirements.",
             "Reset test state when needed before measuring.",
             "Report failures exactly; do not hide or reinterpret failing commands.",
+            EVIDENCE_SCHEMA_RULE,
         ],
     ),
     "evaluator": A(
@@ -94,6 +117,9 @@ BUILTIN_AGENTS: dict[str, dict[str, Any]] = {
             "Use Playwright/browser execution for UI when available and HTTP/tests for APIs where appropriate.",
             "Preserve finding ids across passes and move a finding to resolved only after re-verification.",
             "FAIL or UNVERIFIED whenever required proof is missing.",
+            STATUS_SCHEMA_RULE,
+            FINDINGS_SCHEMA_RULE,
+            EVIDENCE_SCHEMA_RULE,
         ],
     ),
     "fixer": A(
@@ -133,6 +159,9 @@ BUILTIN_AGENTS: dict[str, dict[str, Any]] = {
             "Must not modify product code or task acceptance criteria.",
             "Return task_result.status as PASS, FAIL, or UNVERIFIED.",
             "A task cannot PASS without positive evidence for every required task criterion.",
+            STATUS_SCHEMA_RULE.replace("RUBRIC_STATUS.json", "TASK_RUBRIC_STATUS.json"),
+            FINDINGS_SCHEMA_RULE.replace("FINDINGS.json", "TASK_FINDINGS.json"),
+            EVIDENCE_SCHEMA_RULE,
         ],
     ),
     "integrator": A(
@@ -154,7 +183,7 @@ BUILTIN_AGENTS: dict[str, dict[str, Any]] = {
         ["read", "shell", "browser"],
         ["GLOBAL_SPEC", "RUBRIC_BASELINE", "integrated_product"],
         ["SYSTEM_TEST_REPORT.md", "EVIDENCE"],
-        ["Do not modify product code."],
+        ["Do not modify product code.", EVIDENCE_SCHEMA_RULE],
     ),
     "security_reviewer": A(
         "Security Reviewer",
@@ -163,7 +192,7 @@ BUILTIN_AGENTS: dict[str, dict[str, Any]] = {
         ["read", "shell"],
         ["SPEC", "diff", "PROJECT_MANIFEST", "test_evidence"],
         ["SECURITY_REPORT.md", "security_findings", "EVIDENCE"],
-        ["Do not modify product code during review."],
+        ["Do not modify product code during review.", EVIDENCE_SCHEMA_RULE],
     ),
     "final_reviewer": A(
         "Final Reviewer",
@@ -176,28 +205,35 @@ BUILTIN_AGENTS: dict[str, dict[str, Any]] = {
     ),
     "content_strategist": A(
         "Content Strategist",
-        "Turn a content goal into a closed production SPEC and measurable rubric.",
+        "Turn a content goal into a closed production SPEC and measurable acceptance rubric.",
         "deep_reasoning",
         ["read", "web"],
         ["REQUEST", "PROJECT_MANIFEST"],
         ["SPEC.md", "RUBRIC.json", "PLANNING_REPORT.md"],
+        ["Do not produce final content assets.", RUBRIC_SCHEMA_RULE],
     ),
     "content_producer": A(
         "Content Producer",
-        "Produce the requested content artifacts against the sealed content rubric.",
+        "Produce the requested content artifacts against the sealed content contract.",
         "strong_coding",
         ["image", "video", "voice", "ffmpeg", "write"],
         ["SPEC", "RUBRIC_BASELINE"],
-        ["artifacts", "BUILD_REPORT.md"],
+        ["artifacts", "BUILD_REPORT.md or FIX_REPORT.md"],
+        ["Do not change the sealed acceptance contract or self-approve the content."],
     ),
     "content_evaluator": A(
         "Independent Content Evaluator",
-        "Verify produced content against measurable platform, brand, factual and production criteria.",
+        "Verify content against measurable platform, brand, factual and production criteria.",
         "independent_review",
         ["read", "files", "ffmpeg", "web"],
         ["SPEC", "RUBRIC_BASELINE", "content_artifacts"],
-        ["RUBRIC_STATUS.json", "FINDINGS.md", "FINDINGS.json", "EVALUATION_REPORT.md", "EVIDENCE"],
-        ["Must not modify the produced content during evaluation."],
+        ["RUBRIC_STATUS.json", "FINDINGS.json", "FINDINGS.md", "EVALUATION_REPORT.md", "EVIDENCE"],
+        [
+            "Must not modify the produced content during evaluation.",
+            STATUS_SCHEMA_RULE,
+            FINDINGS_SCHEMA_RULE,
+            EVIDENCE_SCHEMA_RULE,
+        ],
     ),
     "researcher": A(
         "Researcher",
@@ -205,16 +241,22 @@ BUILTIN_AGENTS: dict[str, dict[str, Any]] = {
         "deep_reasoning",
         ["web", "browser", "files"],
         ["SPEC", "RUBRIC_BASELINE"],
-        ["research_artifact", "BUILD_REPORT.md", "EVIDENCE"],
+        ["research_artifacts", "BUILD_REPORT.md or FIX_REPORT.md", "EVIDENCE"],
+        ["Do not claim claims are verified merely because you found a source."],
     ),
     "fact_checker": A(
         "Independent Fact Checker",
-        "Verify research claims against sources, recency, contradictions and citation support.",
+        "Verify claims against sources, recency, contradictions and citation support.",
         "independent_review",
         ["web", "browser", "files"],
-        ["SPEC", "RUBRIC_BASELINE", "research_artifact", "EVIDENCE"],
-        ["RUBRIC_STATUS.json", "FINDINGS.md", "FINDINGS.json", "EVALUATION_REPORT.md", "EVIDENCE"],
-        ["Do not rewrite the research while evaluating it."],
+        ["SPEC", "RUBRIC_BASELINE", "research_artifacts", "EVIDENCE"],
+        ["RUBRIC_STATUS.json", "FINDINGS.json", "FINDINGS.md", "EVALUATION_REPORT.md", "EVIDENCE"],
+        [
+            "Do not rewrite the research while evaluating it.",
+            STATUS_SCHEMA_RULE,
+            FINDINGS_SCHEMA_RULE,
+            EVIDENCE_SCHEMA_RULE,
+        ],
     ),
 }
 
