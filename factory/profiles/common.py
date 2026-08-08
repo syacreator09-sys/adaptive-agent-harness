@@ -1,6 +1,5 @@
 from __future__ import annotations
 from pathlib import Path
-from typing import Any
 from ..artifacts import ArtifactStore
 from ..evidence import EvidenceStore
 from ..state import RunStateStore
@@ -15,7 +14,6 @@ RESERVED_ARTIFACT_WRITERS: dict[str, set[str]] = {
     "FINDINGS.json": {"evaluator", "content_evaluator", "fact_checker"},
     "ARCHITECTURE.md": {"architect"},
     "TASKS.json": {"architect"},
-    # Runtime-owned coordination/output files are never accepted from model output.
     "TASK_OUTPUTS.json": set(),
     "FINAL_REPORT.json": set(),
     "FINAL_REPORT.md": set(),
@@ -31,28 +29,31 @@ class BaseRunner:
         self.store=ArtifactStore(self.target)
 
     def _new(self,request,guardian,domain="code",run_id=None):
-        if run_id:
-            return self.store.get_run(run_id)
-        run=self.store.create_run(request,self.profile,guardian,domain)
-        snap=GitCheckpoints(self.target).snapshot()
+        run=self.store.get_run(run_id) if run_id else self.store.create_run(request,self.profile,guardian,domain)
         state=self._state(run).load()
-        state["git_base"]=snap.get("head")
-        state["git_base_dirty"]=snap.get("dirty",False)
-        state["git_worktree"]=snap.get("is_linked_worktree",False)
-        self._state(run).save(state)
-        req=self.store.read_json(run.run_dir,"REQUEST.json",{})
-        req["git_base"]=snap.get("head")
-        self.store.write_json(run.run_dir,"REQUEST.json",req)
+        if "git_base" not in state:
+            snap=GitCheckpoints(self.target).snapshot()
+            state["git_base"]=snap.get("head")
+            state["git_base_dirty"]=snap.get("dirty",False)
+            state["git_worktree"]=snap.get("is_linked_worktree",False)
+            self._state(run).save(state)
+            req=self.store.read_json(run.run_dir,"REQUEST.json",{})
+            req["git_base"]=snap.get("head")
+            self.store.write_json(run.run_dir,"REQUEST.json",req)
         return run
 
     def _context(self,run,guardian):
-        return {
+        context={
             "run_id":run.run_id,
             "run_dir":str(run.run_dir),
             "guardian":guardian,
             "project":ProjectAdapter(self.target).inspect(),
             "artifact_protocol":"Use files under run_dir only for AAH coordination. Never write secrets.",
         }
+        escalation=self.store.read_json(run.run_dir,"ESCALATION_CONTEXT.json",None)
+        if escalation:
+            context["escalation_context"]=escalation
+        return context
 
     def _record_policy_violation(self,run,role:str,name:str) -> None:
         findings=self._findings(run)
