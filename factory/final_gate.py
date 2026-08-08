@@ -1,97 +1,124 @@
 from __future__ import annotations
 from pathlib import Path
 from typing import Any
+from .contracts import baseline_criteria, validated_status_map, verify_contract
 from .evidence import EvidenceStore
 
-# Across 3 real evaluator runs (2026-08-07, RUN-004/006/007/008) the exact
-# same semantic field came back under 4 different names for evidence
-# pointers and 2 for the pass/fail verdict -- none pinned anywhere in
-# agents.py or .claude/agents/*.md, so a fresh evaluator invents a
-# plausible-sounding name each time. Aliased here as a safety net;
-# .claude/agents/aah-evaluator.md now also pins the canonical shape so
-# future runs converge instead of the alias list growing forever.
-_EVIDENCE_KEYS = ("evidence", "evidence_ref", "evidence_refs", "evidence_ids")
-_STATUS_KEYS = ("status", "verdict")
 
-def _normalize_item(item: dict[str,Any]) -> dict[str,Any]:
-    item = dict(item)
-    for key in _STATUS_KEYS:
-        if item.get(key): item["status"] = item[key]; break
-    for key in _EVIDENCE_KEYS:
-        if item.get(key): item["evidence"] = item[key]; break
-    return item
+def normalize_findings(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, dict):
+        value = value.get("findings", value.get("items", []))
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
 
-def _normalize_rubric(rubric: Any) -> list[dict[str,Any]]:
-    # Neither agents.py nor the .claude/agents/*.md contracts pin down
-    # RUBRIC.json's exact top-level shape -- confirmed live (plan
-    # AUTONOMÍA TOTAL, 2026-08-07, RUN-20260807-004): a real evaluator
-    # wrote {"criteria": [...], "overall_verdict": ..., ...} instead of
-    # a bare list, and `for item in rubric` iterated the dict's string
-    # KEYS, crashing the whole process with AttributeError on
-    # item.get(...) -- exactly the "gate crashes instead of failing
-    # closed" failure mode already fixed once in evidence.py. Same
-    # remedy: normalize known-reasonable shapes, and treat any item
-    # that still isn't a dict as an UNVERIFIED criterion rather than
-    # raising.
-    if isinstance(rubric, dict):
-        rubric = rubric.get("criteria", rubric.get("items", []))
-    if not isinstance(rubric, list): return []
-    return [_normalize_item(item) if isinstance(item, dict) else {"id": str(item), "status": "UNVERIFIED"} for item in rubric]
-
-def _normalize_findings(findings: Any) -> list[dict[str,Any]]:
-    # Same unpinned-schema failure class as _normalize_rubric, hit by the
-    # very next run after that fix (RUN-20260807-006): a real evaluator
-    # wrote FINDINGS.json as one free-form report object (root_cause,
-    # notes, verdict, ...) with no "findings"/"items" list at all --
-    # `for f in findings` iterated its string keys and crashed with the
-    # identical AttributeError. Unlike a rubric criterion (a required,
-    # countable check -- an unparseable one must fail-closed as
-    # UNVERIFIED), an unparseable FINDINGS.json carries no severity to
-    # honestly report, so it degrades to "no additional findings logged"
-    # rather than inventing a blocking one; RUBRIC.json stays the
-    # authoritative PASS/FAIL source either way.
-    if isinstance(findings, dict):
-        findings = findings.get("findings", findings.get("items", []))
-    if not isinstance(findings, list): return []
-    return [f for f in findings if isinstance(f, dict)]
 
 class FinalGate:
-    def __init__(self, run_dir: Path): self.run_dir=Path(run_dir)
-    def evaluate(self, rubric: list[dict[str,Any]], findings: list[dict[str,Any]], mandatory_gates: list[dict[str,Any]]|None=None) -> dict[str,Any]:
-        rubric=_normalize_rubric(rubric)
-        findings=_normalize_findings(findings)
-        records=EvidenceStore(self.run_dir).all()
-        failures=[]
-        # Same unresolved-schema gap as the rubric shape above: nothing
-        # documents whether a criterion's evidence pointer is the
-        # EvidenceStore's own "id" or the evidence record's semantic
-        # "type" -- a real evaluator run referenced evidence by "type"
-        # (e.g. "unittest_run"), which is legitimately admissible (it
-        # resolves to a real, redacted EVIDENCE.jsonl record) even
-        # though it isn't a literal "id" match.
-        evidence_refs={str(r.get("id")) for r in records} | {str(r.get("type")) for r in records if r.get("type")}
-        for item in rubric:
-            if not item.get("required",True): continue
-            status=str(item.get("status","UNVERIFIED")).upper()
-            if status!="PASS": failures.append(f"{item.get('id')}:status={status}")
-            refs=item.get("evidence") or []
-            if not refs: failures.append(f"{item.get('id')}:missing_evidence")
-            elif any(str(x) not in evidence_refs for x in refs): failures.append(f"{item.get('id')}:invalid_evidence")
-        for f in findings:
-            if str(f.get("status","open")).lower()=="open" and str(f.get("severity","")).lower() in {"critical","major"}:
-                failures.append(f"{f.get('id')}:open_{f.get('severity')}")
+    """Fail-closed deterministic completion gate.
+
+    Required acceptance criteria are read only from the sealed runtime contract.
+    Evaluator status must be a valid snapshot of that contract. Criterion proof
+    references stable evidence IDs only; semantic evidence types are reserved for
+    mandatory technical/system/security gates.
+    """
+
+    def __init__(self, run_dir: Path):
+        self.run_dir = Path(run_dir)
+
+    def evaluate(
+        self,
+        rubric: Any = None,
+        findings: Any = None,
+        mandatory_gates: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        del rubric
+        failures: list[str] = []
+        if not (self.run_dir / "CONTRACT.json").exists():
+            return {
+                "done": False,
+                "failures": ["contract:missing"],
+                "required": 0,
+                "passed": 0,
+                "contract_sealed": False,
+            }
+
+        contract_ok, contract_failures = verify_contract(self.run_dir)
+        if not contract_ok:
+            failures.extend(contract_failures)
+        criteria = baseline_criteria(self.run_dir)
+        statuses, status_failures = validated_status_map(self.run_dir, criteria)
+        failures.extend(status_failures)
+
+        required = [item for item in criteria if item.get("required", True)]
+        if not criteria:
+            failures.append("rubric:missing_or_invalid")
+        if criteria and not required:
+            failures.append("rubric:no_required_criteria")
+
+        records = EvidenceStore(self.run_dir).all()
+        if any(record.get("_invalid") for record in records):
+            failures.append("evidence:invalid_jsonl")
+
+        by_id: dict[str, list[dict[str, Any]]] = {}
+        for record in records:
+            evidence_id = record.get("id")
+            if evidence_id not in (None, ""):
+                by_id.setdefault(str(evidence_id), []).append(record)
+        for evidence_id, matches in by_id.items():
+            if len(matches) > 1:
+                failures.append(f"evidence:duplicate_id:{evidence_id}")
+
+        passed = 0
+        for baseline in required:
+            criterion_id = str(baseline.get("id") or "unknown")
+            status_row = statuses.get(criterion_id, {})
+            status = str(status_row.get("status", "UNVERIFIED")).upper()
+            criterion_ok = status == "PASS"
+            if not criterion_ok:
+                failures.append(f"{criterion_id}:status={status}")
+
+            refs = status_row.get("evidence") or []
+            if not refs:
+                failures.append(f"{criterion_id}:missing_evidence")
+                criterion_ok = False
+            else:
+                for ref in refs:
+                    matched = by_id.get(str(ref), [])
+                    if not matched:
+                        failures.append(f"{criterion_id}:invalid_evidence:{ref}")
+                        criterion_ok = False
+                        continue
+                    if len(matched) != 1:
+                        failures.append(f"{criterion_id}:ambiguous_evidence:{ref}")
+                        criterion_ok = False
+                        continue
+                    record = matched[0]
+                    if record.get("ok") is False:
+                        failures.append(f"{criterion_id}:failed_evidence:{ref}")
+                        criterion_ok = False
+                        continue
+                    if record.get("ok") is not True:
+                        failures.append(f"{criterion_id}:unverified_evidence:{ref}")
+                        criterion_ok = False
+            if criterion_ok:
+                passed += 1
+
+        for finding in normalize_findings(findings or []):
+            if (
+                str(finding.get("status", "open")).lower() == "open"
+                and str(finding.get("severity", "")).lower() in {"critical", "major"}
+            ):
+                failures.append(f"{finding.get('id', 'finding')}:open_{finding.get('severity')}")
+
         for gate in mandatory_gates or []:
-            if not gate.get("ok",False): failures.append(f"gate:{gate.get('name','unknown')}")
-        required_count=sum(1 for x in rubric if x.get("required",True))
-        if required_count==0:
-            # Found live (plan AUTONOMÍA TOTAL, 2026-08-07, RUN-20260807-009):
-            # a real run wrote no RUBRIC.json/FINDINGS.json/EVIDENCE at all
-            # (empty artifacts/, empty EVIDENCE.jsonl) and still closed
-            # done=true after one pass, because an empty rubric trivially
-            # produces zero failures. That is a silent false positive --
-            # the direct opposite of "never claim PASS without admissible
-            # evidence" (agents.py::BASE_RULES) -- worse than a rejection,
-            # since nothing was actually checked. Absence of verification
-            # must never read as successful verification.
-            failures.append("rubric:no_criteria_recorded")
-        return {"done":not failures,"failures":failures,"required":required_count,"passed":sum(1 for x in rubric if x.get("required",True) and str(x.get("status","")).upper()=="PASS")}
+            if gate.get("ok") is not True:
+                failures.append(f"gate:{gate.get('name', 'unknown')}")
+
+        failures = list(dict.fromkeys(failures))
+        return {
+            "done": not failures,
+            "failures": failures,
+            "required": len(required),
+            "passed": passed,
+            "contract_sealed": True,
+        }

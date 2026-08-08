@@ -10,6 +10,6 @@ class AgentTests(unittest.TestCase):
             agent = reg.get(name)
             for key in ["identity","mission","capability","tools","inputs","outputs","rules"]:
                 self.assertIn(key, agent)
-        self.assertIn("must not modify product code", " ".join(reg.get("evaluator")["rules"]).lower())
+        self.assertIn("never modify product code", " ".join(reg.get("evaluator")["rules"]).lower())
 
 if __name__ == "__main__": unittest.main()
