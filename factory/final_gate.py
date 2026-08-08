@@ -82,4 +82,16 @@ class FinalGate:
                 failures.append(f"{f.get('id')}:open_{f.get('severity')}")
         for gate in mandatory_gates or []:
             if not gate.get("ok",False): failures.append(f"gate:{gate.get('name','unknown')}")
-        return {"done":not failures,"failures":failures,"required":sum(1 for x in rubric if x.get("required",True)),"passed":sum(1 for x in rubric if x.get("required",True) and str(x.get("status","")).upper()=="PASS")}
+        required_count=sum(1 for x in rubric if x.get("required",True))
+        if required_count==0:
+            # Found live (plan AUTONOMÍA TOTAL, 2026-08-07, RUN-20260807-009):
+            # a real run wrote no RUBRIC.json/FINDINGS.json/EVIDENCE at all
+            # (empty artifacts/, empty EVIDENCE.jsonl) and still closed
+            # done=true after one pass, because an empty rubric trivially
+            # produces zero failures. That is a silent false positive --
+            # the direct opposite of "never claim PASS without admissible
+            # evidence" (agents.py::BASE_RULES) -- worse than a rejection,
+            # since nothing was actually checked. Absence of verification
+            # must never read as successful verification.
+            failures.append("rubric:no_criteria_recorded")
+        return {"done":not failures,"failures":failures,"required":required_count,"passed":sum(1 for x in rubric if x.get("required",True) and str(x.get("status","")).upper()=="PASS")}

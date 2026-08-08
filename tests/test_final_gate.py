@@ -92,6 +92,18 @@ class FinalGateTests(unittest.TestCase):
             result = FinalGate(run).evaluate(rubric, findings=[])
             self.assertTrue(result["done"])
 
+    def test_empty_rubric_never_vacuously_passes(self):
+        """Real bug found live (plan AUTONOMÍA TOTAL, 2026-08-07,
+        RUN-20260807-009): a run wrote no RUBRIC.json/FINDINGS.json/
+        EVIDENCE at all and still closed done=true after one pass,
+        because zero criteria produced zero failures. A silent false
+        positive -- absence of verification must never read as PASS."""
+        with tempfile.TemporaryDirectory() as td:
+            run = Path(td)
+            result = FinalGate(run).evaluate([], findings=[])
+            self.assertFalse(result["done"])
+            self.assertIn("rubric:no_criteria_recorded", result["failures"])
+
     def test_verdict_key_and_evidence_ids_key_are_also_admissible(self):
         """A fourth real evaluator (RUN-20260807-008) used "verdict"
         instead of "status" AND "evidence_ids" instead of any of the
