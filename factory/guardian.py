@@ -30,14 +30,9 @@ class Guardian:
         re.compile(r"\b(shutdown|reboot|halt|poweroff)\b"),
     ]
     PROD_PATTERNS=[re.compile(x,re.I) for x in [
-        r"kubectl\s+(apply|delete|replace|patch)",
-        r"terraform\s+(apply|destroy)",
-        r"\bDROP\s+DATABASE\b",
-        r"\bDROP\s+TABLE\b",
-        r"\bTRUNCATE\s+TABLE\b",
-        r"\bproduction\b",
-        r"\bprod\b",
-        r"git\s+push\b",
+        r"kubectl\s+(apply|delete|replace|patch)", r"terraform\s+(apply|destroy)",
+        r"\bDROP\s+DATABASE\b", r"\bDROP\s+TABLE\b", r"\bTRUNCATE\s+TABLE\b",
+        r"\bproduction\b", r"\bprod\b", r"git\s+push\b",
     ]]
     PROTECTED_WRITE_PREFIXES=(".git/", ".claude/", ".codex/", ".aah/runtime/", ".aah/bin/")
     PROTECTED_READ_PREFIXES=(".git/", ".aah/runtime/", ".aah/bin/")
@@ -52,33 +47,24 @@ class Guardian:
         "ARCHITECTURE.md","TASKS.json","TASK_OUTPUTS.json","FINAL_REPORT.json","FINAL_REPORT.md",
     }
     ROLE_RESERVED_ALLOW={
-        "planner":{"SPEC.md","RUBRIC.json"},
-        "content_strategist":{"SPEC.md","RUBRIC.json"},
+        "planner":{"SPEC.md","RUBRIC.json"}, "content_strategist":{"SPEC.md","RUBRIC.json"},
         "architect":{"ARCHITECTURE.md","TASKS.json"},
         "evaluator":{"RUBRIC.json","FINDINGS.json","EVIDENCE.jsonl"},
         "content_evaluator":{"RUBRIC.json","FINDINGS.json","EVIDENCE.jsonl"},
         "fact_checker":{"RUBRIC.json","FINDINGS.json","EVIDENCE.jsonl"},
-        "tester":{"EVIDENCE.jsonl"},
-        "task_evaluator":{"EVIDENCE.jsonl"},
-        "system_tester":{"EVIDENCE.jsonl"},
-        "security_reviewer":{"EVIDENCE.jsonl"},
+        "tester":{"EVIDENCE.jsonl"}, "task_evaluator":{"EVIDENCE.jsonl"},
+        "system_tester":{"EVIDENCE.jsonl"}, "security_reviewer":{"EVIDENCE.jsonl"},
     }
 
     REVIEW_SAFE_COMMANDS=[re.compile(x,re.I) for x in [
-        r"^pwd$",
-        r"^ls(?:\s|$)",
-        r"^git\s+(status|diff|log|show|rev-parse)(?:\s|$)",
-        r"^(rg|grep|head|tail|wc)\s",
-        r"^(python|python3)\s+-m\s+(pytest|unittest)(?:\s|$)",
-        r"^pytest(?:\s|$)",
-        r"^npm\s+(test|run\s+(test|lint|build|typecheck|check|dev|start))(?:\s|$)",
+        r"^pwd$", r"^ls(?:\s|$)", r"^git\s+(status|diff|log|show|rev-parse)(?:\s|$)",
+        r"^(rg|grep|head|tail|wc)\s", r"^(python|python3)\s+-m\s+(pytest|unittest)(?:\s|$)",
+        r"^pytest(?:\s|$)", r"^npm\s+(test|run\s+(test|lint|build|typecheck|check|dev|start))(?:\s|$)",
         r"^pnpm\s+(test|run\s+(test|lint|build|typecheck|check|dev|start))(?:\s|$)",
         r"^yarn\s+(test|run\s+(test|lint|build|typecheck|check|dev|start))(?:\s|$)",
         r"^bun\s+(test|run\s+(test|lint|build|typecheck|check|dev|start))(?:\s|$)",
-        r"^cargo\s+(test|check|build)(?:\s|$)",
-        r"^go\s+test(?:\s|$)",
-        r"^(npx\s+)?playwright\s+test(?:\s|$)",
-        r"^ffprobe\s+[^;&|`<>]+$",
+        r"^cargo\s+(test|check|build)(?:\s|$)", r"^go\s+test(?:\s|$)",
+        r"^(npx\s+)?playwright\s+test(?:\s|$)", r"^ffprobe\s+[^;&|`<>]+$",
         r"^curl\s+[^;&|`]*https?://(127\.0\.0\.1|localhost)(:\d+)?(?:/[^\s]*)?(?:\s|$)",
     ]]
 
@@ -90,16 +76,14 @@ class Guardian:
         if not role:
             return None
         role=role.strip().lower().replace("-","_")
-        if role.startswith("aah_"):
-            role=role[4:]
-        return role
+        return role[4:] if role.startswith("aah_") else role
 
     @staticmethod
     def _sensitive_command_text(command: str) -> bool:
         normalized=command.replace("\\","/").lower()
         return any(x in normalized for x in [".env", "/.ssh/", "/.aws/", "/.config/gcloud/", "/.azure/", "/.kube/config"])
 
-    def _artifact_role_command(self, command: str, role: str) -> CommandDecision | None:
+    def _artifact_role_command(self, command: str, role: str) -> CommandDecision:
         compact=command.strip()
         if self._sensitive_command_text(compact):
             return CommandDecision(Decision.BLOCK,f"{role} cannot read sensitive paths from shell")
@@ -116,29 +100,29 @@ class Guardian:
         normalized=self.normalize_role(role)
         if normalized in self.ARTIFACT_ONLY_ROLES:
             return self._artifact_role_command(command,normalized)
+        if self._sensitive_command_text(command):
+            return CommandDecision(Decision.BLOCK,"shell access to protected credential paths is blocked")
         if re.search(r"\b(curl|wget)\b[^|]*\|\s*(bash|sh)\b",command):
-            if self.mode=="locked":
-                return CommandDecision(Decision.BLOCK,"remote pipe-to-shell blocked in LOCKED")
-            if self.mode=="guarded":
-                return CommandDecision(Decision.REQUIRE_APPROVAL,"remote pipe-to-shell requires approval")
+            if self.mode=="locked": return CommandDecision(Decision.BLOCK,"remote pipe-to-shell blocked in LOCKED")
+            if self.mode=="guarded": return CommandDecision(Decision.REQUIRE_APPROVAL,"remote pipe-to-shell requires approval")
             return CommandDecision(Decision.WARN,"remote pipe-to-shell is risky")
         if any(p.search(command) for p in self.PROD_PATTERNS):
-            if self.mode=="locked":
-                return CommandDecision(Decision.REQUIRE_APPROVAL,"production-sensitive action")
-            if self.mode=="guarded":
-                return CommandDecision(Decision.WARN,"production-sensitive action")
+            if self.mode=="locked": return CommandDecision(Decision.REQUIRE_APPROVAL,"production-sensitive action")
+            if self.mode=="guarded": return CommandDecision(Decision.WARN,"production-sensitive action")
         return CommandDecision(Decision.ALLOW,"routine command")
 
     @staticmethod
-    def _clean(path: str, root: str | None=None) -> str:
-        p=path.replace("\\","/")
+    def _clean(path: str, root: str | None=None) -> str | None:
+        raw=Path(path).expanduser()
         if root:
+            base=Path(root).resolve()
+            candidate=(base/raw).resolve() if not raw.is_absolute() else raw.resolve()
             try:
-                p=str(Path(p).resolve().relative_to(Path(root).resolve())).replace("\\","/")
-            except Exception:
-                pass
-        while p.startswith("./"):
-            p=p[2:]
+                return str(candidate.relative_to(base)).replace("\\","/")
+            except ValueError:
+                return None
+        p=str(raw).replace("\\","/")
+        while p.startswith("./"): p=p[2:]
         return p
 
     @staticmethod
@@ -148,34 +132,26 @@ class Guardian:
 
     def can_read(self, path: str, root: str|None=None) -> bool:
         clean=self._clean(path,root)
+        if clean is None: return False
         absolute=path.replace("\\","/")
-        if self._env_path(clean):
-            return False
-        if any(x in absolute for x in self.SENSITIVE_HOME_PARTS):
-            return False
-        if clean.startswith(self.PROTECTED_READ_PREFIXES):
-            return False
+        if self._env_path(clean): return False
+        if any(x in absolute for x in self.SENSITIVE_HOME_PARTS): return False
+        if clean.startswith(self.PROTECTED_READ_PREFIXES): return False
         return True
 
     def can_write(self, path: str, root: str|None=None, role: str|None=None) -> bool:
         clean=self._clean(path,root)
+        if clean is None: return False
         absolute=path.replace("\\","/")
         normalized=self.normalize_role(role)
-
-        if self._env_path(clean):
-            return False
-        if any(x in absolute for x in self.SENSITIVE_HOME_PARTS):
-            return False
-        if clean.startswith(self.PROTECTED_WRITE_PREFIXES):
-            return False
-        if clean.startswith(".aah/") and not clean.startswith(".aah/runs/"):
-            return False
-
+        if self._env_path(clean): return False
+        if any(x in absolute for x in self.SENSITIVE_HOME_PARTS): return False
+        if clean.startswith(self.PROTECTED_WRITE_PREFIXES): return False
+        if clean.startswith(".aah/") and not clean.startswith(".aah/runs/"): return False
         if clean.startswith(".aah/runs/") and normalized:
             basename=Path(clean).name
             if basename in self.RESERVED_RUN_FILES and basename not in self.ROLE_RESERVED_ALLOW.get(normalized,set()):
                 return False
-
         if normalized in self.ARTIFACT_ONLY_ROLES and not clean.startswith(".aah/runs/"):
             return False
         return True
