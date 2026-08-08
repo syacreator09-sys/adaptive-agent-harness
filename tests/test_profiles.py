@@ -67,8 +67,8 @@ class ProfileTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             target = Path(td)
             task_graph = {"tasks":[
-                {"id":"T1","title":"backend","profile":"lite","depends_on":[]},
-                {"id":"T2","title":"frontend","profile":"lite","depends_on":["T1"]}
+                {"id":"T1","title":"backend","profile":"lite","depends_on":[],"acceptance":["backend acceptance passes"]},
+                {"id":"T2","title":"frontend","profile":"lite","depends_on":["T1"],"acceptance":["frontend acceptance passes"]}
             ]}
             ex = ScriptedExecutor({
                 "planner":[planner_ok()],
@@ -94,7 +94,7 @@ class ProfileTests(unittest.TestCase):
     def test_factory_task_pass_without_positive_evidence_is_rejected(self):
         with tempfile.TemporaryDirectory() as td:
             target=Path(td)
-            task_graph={"tasks":[{"id":"T1","title":"x","profile":"lite","depends_on":[]}]}
+            task_graph={"tasks":[{"id":"T1","title":"x","profile":"lite","depends_on":[],"acceptance":["x passes"]}]}
             ex=ScriptedExecutor({
                 "planner":[planner_ok()],
                 "architect":[{"artifacts":{"ARCHITECTURE.md":"arch","TASKS.json":task_graph}}],
