@@ -1,21 +1,33 @@
 from __future__ import annotations
 import json, os, sys
-from .guardian import Guardian, Decision
 from pathlib import Path
+from .guardian import Guardian, Decision
 
-def _latest_guardian_mode(root: str | None) -> str:
-    if not root: return "guarded"
+
+def _active_guardian_mode(root: str | None) -> str:
+    """Native Claude sessions share a project hook. Use the strictest active run, never the newest by assumption."""
+    if not root:
+        return "guarded"
     runs=Path(root)/".aah"/"runs"
+    rank={"open":0,"guarded":1,"locked":2}
+    modes=[]
     try:
-        candidates=sorted([p for p in runs.iterdir() if p.is_dir()])
-        if not candidates: return "guarded"
-        state=candidates[-1]/"STATE.json"
-        if state.exists():
-            value=json.loads(state.read_text(encoding="utf-8")).get("guardian")
-            if value in {"open","guarded","locked"}: return value
+        for candidate in runs.iterdir():
+            if not candidate.is_dir():
+                continue
+            state=candidate/"STATE.json"
+            if not state.exists():
+                continue
+            data=json.loads(state.read_text(encoding="utf-8"))
+            if data.get("status")=="done":
+                continue
+            mode=data.get("guardian")
+            if mode in rank:
+                modes.append(mode)
     except Exception:
-        pass
-    return "guarded"
+        return "guarded"
+    return max(modes,key=lambda m:rank[m]) if modes else "guarded"
+
 
 def _decision(value: str, reason: str):
     print(json.dumps({"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":value,"permissionDecisionReason":reason}}))
@@ -25,32 +37,60 @@ def main() -> int:
     try:
         data=json.load(sys.stdin)
     except Exception:
-        # Fail closed only for malformed hook input in locked mode; otherwise avoid breaking Claude.
-        if os.environ.get("AAH_GUARDIAN_MODE","guarded")=="locked":
-            print("AAH Guardian: malformed hook input",file=sys.stderr); return 2
-        return 0
+        # Hook input that cannot be interpreted must not silently authorize a tool call.
+        print("AAH Guardian: malformed PreToolUse input",file=sys.stderr)
+        return 2
+
     root=os.environ.get("AAH_TARGET_ROOT") or data.get("cwd")
-    mode=os.environ.get("AAH_GUARDIAN_MODE") or _latest_guardian_mode(root)
+    mode=os.environ.get("AAH_GUARDIAN_MODE") or _active_guardian_mode(root)
     g=Guardian(mode)
     role=data.get("agent_type") or os.environ.get("AAH_ROLE")
     name=str(data.get("tool_name") or "")
     inp=data.get("tool_input") or {}
+
     if name=="Bash":
-        d=g.classify_command(str(inp.get("command") or ""),role=role)
-        if d.decision==Decision.BLOCK:
-            _decision("deny",d.reason); return 0
-        if d.decision==Decision.REQUIRE_APPROVAL:
-            _decision("ask",d.reason); return 0
-        # WARN is advisory in non-locked modes; normal Claude permissions still apply.
+        decision=g.classify_command(str(inp.get("command") or ""),role=role)
+        if decision.decision==Decision.BLOCK:
+            _decision("deny",decision.reason); return 0
+        if decision.decision==Decision.REQUIRE_APPROVAL:
+            _decision("ask",decision.reason); return 0
         return 0
+
     if name in {"Write","Edit","NotebookEdit"}:
         path=str(inp.get("file_path") or inp.get("notebook_path") or "")
-        if path and not g.can_write(path,root,role=role):
-            _decision("deny",f"AAH Guardian protects writes to {path}"); return 0
+        if not path or not g.can_write(path,root,role=role):
+            _decision("deny",f"AAH Guardian protects writes to {path or '[missing path]'}"); return 0
+        return 0
+
     if name=="Read":
         path=str(inp.get("file_path") or "")
+        if not path or not g.can_read(path,root):
+            _decision("deny",f"AAH Guardian protects reads from {path or '[missing path]'}"); return 0
+        return 0
+
+    if name=="Grep":
+        path=str(inp.get("path") or "")
+        glob=str(inp.get("glob") or "")
+        if ".env" in glob or any(x in glob for x in [".ssh",".aws",".kube"]):
+            _decision("deny","AAH Guardian blocks Grep over sensitive file patterns"); return 0
+        normalized=Guardian.normalize_role(role)
+        if normalized in Guardian.ARTIFACT_ONLY_ROLES and not path:
+            _decision("deny","AAH review roles must scope Grep to an explicit readable project path"); return 0
         if path and not g.can_read(path,root):
-            _decision("deny",f"AAH Guardian protects sensitive reads from {path}"); return 0
+            _decision("deny",f"AAH Guardian protects Grep path {path}"); return 0
+        return 0
+
+    if name=="Glob":
+        path=str(inp.get("path") or "")
+        pattern=str(inp.get("pattern") or "")
+        if any(x in pattern for x in [".env",".ssh",".aws",".kube"]):
+            _decision("deny","AAH Guardian blocks Glob over sensitive file patterns"); return 0
+        if path and not g.can_read(path,root):
+            _decision("deny",f"AAH Guardian protects Glob path {path}"); return 0
+        return 0
+
     return 0
 
-if __name__=="__main__": raise SystemExit(main())
+
+if __name__=="__main__":
+    raise SystemExit(main())
