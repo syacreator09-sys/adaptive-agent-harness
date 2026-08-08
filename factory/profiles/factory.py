@@ -31,15 +31,12 @@ class FactoryRunner(BaseRunner):
     def _seed_task_contract(self, run, task: dict[str, Any]) -> Path:
         task_dir = self._task_dir(run, task["id"])
         if (task_dir / "CONTRACT.json").exists():
+            seal_contract(task_dir)
             return task_dir
         spec_lines = [
-            f"# TASK SPEC — {task['id']}",
-            "",
-            f"## Objective\n{task.get('title') or task['id']}",
-            "",
-            f"## Profile\n{task['profile'].upper()}",
-            "",
-            "## Scope",
+            f"# TASK SPEC — {task['id']}", "",
+            f"## Objective\n{task.get('title') or task['id']}", "",
+            f"## Profile\n{task['profile'].upper()}", "", "## Scope",
         ]
         scope = task.get("scope") or []
         spec_lines += [f"- {item}" for item in scope] if scope else ["- Use only the minimum project scope required by this task."]
@@ -51,23 +48,14 @@ class FactoryRunner(BaseRunner):
         for index, criterion in enumerate(task["acceptance"], start=1):
             criterion_id = f"{task['id']}-R-{index:03d}"
             spec_lines.append(f"- {criterion_id}: {criterion}")
-            rubric.append(
-                {
-                    "id": criterion_id,
-                    "required": True,
-                    "criterion": criterion,
-                }
-            )
+            rubric.append({"id": criterion_id, "required": True, "criterion": criterion})
         spec = "\n".join(spec_lines) + "\n"
         (task_dir / "TASK_SPEC.md").write_text(spec, encoding="utf-8")
         (task_dir / "SPEC.md").write_text(spec, encoding="utf-8")
         (task_dir / "RUBRIC.json").write_text(json.dumps({"criteria": rubric}, indent=2) + "\n", encoding="utf-8")
         seal_contract(task_dir)
         EventJournal(run.run_dir).append(
-            "TASK_CONTRACT_SEALED",
-            task_id=task["id"],
-            profile=task["profile"],
-            criteria=len(rubric),
+            "TASK_CONTRACT_SEALED", task_id=task["id"], profile=task["profile"], criteria=len(rubric)
         )
         return task_dir
 
@@ -117,15 +105,18 @@ class FactoryRunner(BaseRunner):
         except Exception:
             return []
 
-    def _task_pending(self, task_dir: Path) -> list[dict[str, Any]]:
+    def _task_pending(self, run, task_dir: Path) -> list[dict[str, Any]]:
         git = GitCheckpoints(self.target)
+        state = self._state(run).load()
+        planning = state.get("planning_checkpoint") or {}
+        since = planning.get("head") or state.get("git_base")
         severity = {"critical": 0, "major": 1, "minor": 2}
         items = []
         for finding in self._task_findings(task_dir):
             if str(finding.get("status", "open")).lower() != "open":
                 continue
             finding_id = str(finding.get("id") or "")
-            if finding_id and git.has_finding_commit(finding_id):
+            if finding_id and git.has_finding_commit(finding_id, since=since):
                 continue
             items.append(finding)
         return sorted(items, key=lambda item: severity.get(str(item.get("severity", "minor")).lower(), 9))
@@ -156,23 +147,29 @@ class FactoryRunner(BaseRunner):
         last_technical = {"name": "task_technical_tests", "ok": hinted == "lite"}
 
         for attempt in range(1, max_passes + 1):
-            worker_role = role_for(domain, "worker")
-            pending = self._task_pending(task_dir)
-            mode = "build" if attempt == 1 else "fix"
-            worker = self._dispatch(
-                run,
-                worker_role,
-                {
-                    **task,
-                    "mode": mode,
-                    "attempt": attempt,
-                    "task_run_dir": str(task_dir),
-                    "findings": pending,
-                },
-                task_context,
-                ingest=False,
-            )
-            self._ingest_task(task_dir, worker, worker_role)
+            pending = self._task_pending(run, task_dir)
+            should_build = attempt == 1
+            should_fix = attempt > 1 and bool(pending)
+            if should_build or should_fix:
+                worker_role = role_for(domain, "worker")
+                worker = self._dispatch(
+                    run,
+                    worker_role,
+                    {
+                        **task,
+                        "mode": "build" if should_build else "fix",
+                        "attempt": attempt,
+                        "task_run_dir": str(task_dir),
+                        "findings": pending,
+                    },
+                    task_context,
+                    ingest=False,
+                )
+                self._ingest_task(task_dir, worker, worker_role)
+            else:
+                EventJournal(run.run_dir).append(
+                    "TASK_REVERIFY_WITHOUT_FIX", task_id=task_id, attempt=attempt, reason="no_actionable_findings"
+                )
 
             mandatory: list[dict[str, Any]] = []
             if hinted == "pro":
@@ -192,43 +189,24 @@ class FactoryRunner(BaseRunner):
             evaluated = self._dispatch(
                 run,
                 evaluator_role,
-                {
-                    "mode": "task_evaluate",
-                    "task": task,
-                    "attempt": attempt,
-                    "task_run_dir": str(task_dir),
-                },
+                {"mode": "task_evaluate", "task": task, "attempt": attempt, "task_run_dir": str(task_dir)},
                 task_context,
                 ingest=False,
             )
             self._ingest_task(task_dir, evaluated, evaluator_role)
             gate = FinalGate(task_dir).evaluate(None, self._task_findings(task_dir), mandatory)
-            history.append(
-                {
-                    "attempt": attempt,
-                    "done": gate["done"],
-                    "gate": gate,
-                    "rubric": self._task_rubric(task_dir),
-                    "technical": last_technical,
-                }
-            )
+            history.append({
+                "attempt": attempt,
+                "done": gate["done"],
+                "gate": gate,
+                "rubric": self._task_rubric(task_dir),
+                "technical": last_technical,
+            })
             EventJournal(run.run_dir).append(
-                "TASK_EVALUATED",
-                task_id=task_id,
-                attempt=attempt,
-                profile=hinted,
-                done=gate["done"],
+                "TASK_EVALUATED", task_id=task_id, attempt=attempt, profile=hinted, done=gate["done"]
             )
             if gate["done"]:
                 return {"ok": True, "task_id": task_id, "profile": hinted, "history": history, "task_dir": str(task_dir)}
-
-            if attempt < max_passes and not self._task_pending(task_dir):
-                EventJournal(run.run_dir).append(
-                    "TASK_REVERIFY_WITHOUT_FIX",
-                    task_id=task_id,
-                    attempt=attempt,
-                    reason="no_actionable_findings",
-                )
 
         return {
             "ok": False,
@@ -269,15 +247,13 @@ class FactoryRunner(BaseRunner):
             return TaskGraph(raw)
         except Exception as exc:
             findings = self._findings(run)
-            findings.append(
-                {
-                    "id": "F-TASK-GRAPH",
-                    "severity": "major",
-                    "status": "open",
-                    "rubric_id": None,
-                    "detail": f"Architect failed to produce a valid task graph: {exc}",
-                }
-            )
+            findings.append({
+                "id": "F-TASK-GRAPH",
+                "severity": "major",
+                "status": "open",
+                "rubric_id": None,
+                "detail": f"Architect failed to produce a valid task graph: {exc}",
+            })
             self.store.write_json(run.run_dir, "FINDINGS.json", findings)
             EvidenceStore(run.run_dir).append(
                 {"id": "E-TASK-GRAPH", "type": "task_graph_validation", "ok": False, "detail": str(exc)}
@@ -291,15 +267,7 @@ class FactoryRunner(BaseRunner):
         journal = EventJournal(run.run_dir)
 
         try:
-            if not (run.run_dir / "CONTRACT.json").exists():
-                state.transition(Phase.PLANNING)
-                self._dispatch(
-                    run,
-                    role_for(domain, "planner"),
-                    {"request": request, "mode": "plan", "profile": "factory"},
-                    context,
-                )
-                self._seal(run)
+            self._ensure_contract(run, state, context, request, domain, "factory")
 
             if not (run.run_dir / "ARCHITECTURE.md").exists() or not (run.run_dir / "TASKS.json").exists():
                 state.transition(Phase.ARCHITECTURE)
@@ -327,15 +295,13 @@ class FactoryRunner(BaseRunner):
                 self.store.write_json(run.run_dir, "TASK_OUTPUTS.json", task_outputs)
                 if not result["ok"]:
                     findings = self._findings(run)
-                    findings.append(
-                        {
-                            "id": f"TASK-{task['id']}",
-                            "severity": "major",
-                            "status": "open",
-                            "rubric_id": None,
-                            "detail": "Task failed its independent sealed task harness",
-                        }
-                    )
+                    findings.append({
+                        "id": f"TASK-{task['id']}",
+                        "severity": "major",
+                        "status": "open",
+                        "rubric_id": None,
+                        "detail": "Task failed its independent sealed task harness",
+                    })
                     self.store.write_json(run.run_dir, "FINDINGS.json", findings)
                     gate = self._gate(run, [{"name": "task_graph", "ok": False}])
                     state.transition(Phase.PAUSED, status="incomplete", blocked_task=task["id"])
@@ -405,11 +371,7 @@ class FactoryRunner(BaseRunner):
                 Phase.DONE if gate["done"] else Phase.PAUSED,
                 status="done" if gate["done"] else "incomplete",
             )
-            return self._write_report(
-                run,
-                gate,
-                {"tasks": len(graph.tasks), "task_outputs": task_outputs},
-            )
+            return self._write_report(run, gate, {"tasks": len(graph.tasks), "task_outputs": task_outputs})
         except AgentDispatchError as exc:
             return self._abort(run, state, exc, state.load().get("phase", "factory"))
         except Exception as exc:
