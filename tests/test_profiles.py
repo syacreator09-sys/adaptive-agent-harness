@@ -1,7 +1,6 @@
 import tempfile
 import unittest
 from pathlib import Path
-from factory.artifacts import ArtifactStore
 from factory.executor import ScriptedExecutor
 from factory.profiles.lite import LiteRunner
 from factory.profiles.pro import ProRunner
@@ -14,17 +13,20 @@ def planner_ok():
         "RUBRIC.json": [{"id":"R-1","description":"works","required":True,"status":"UNVERIFIED","evidence":[]}]
     }}
 
+
 def evaluator_fail():
     return {"artifacts": {
         "RUBRIC.json": [{"id":"R-1","description":"works","required":True,"status":"FAIL","evidence":["E-1"]}],
         "FINDINGS.json": [{"id":"F-1","severity":"major","status":"open","rubric_id":"R-1"}]
     }, "evidence":[{"id":"E-1","kind":"test","ok":False,"detail":"failed"}]}
 
+
 def evaluator_pass():
     return {"artifacts": {
         "RUBRIC.json": [{"id":"R-1","description":"works","required":True,"status":"PASS","evidence":["E-2"]}],
         "FINDINGS.json": [{"id":"F-1","severity":"major","status":"resolved","rubric_id":"R-1"}]
     }, "evidence":[{"id":"E-2","kind":"test","ok":True,"detail":"passed"}]}
+
 
 class ProfileTests(unittest.TestCase):
     def test_lite_loops_and_uses_fresh_evaluator(self):
@@ -47,14 +49,19 @@ class ProfileTests(unittest.TestCase):
                 "planner":[planner_ok()],
                 "architect":[{"artifacts":{"ARCHITECTURE.md":"arch"}}],
                 "builder":[{"summary":"built"}],
-                "tester":[{"evidence":[{"id":"T-1","kind":"test","ok":True,"detail":"suite"}]} , {"evidence":[{"id":"T-2","kind":"test","ok":True,"detail":"suite2"}]}],
+                "tester":[
+                    {"evidence":[{"id":"T-1","kind":"test","ok":True,"detail":"suite"}]},
+                    {"evidence":[{"id":"T-2","kind":"test","ok":True,"detail":"suite2"}]},
+                ],
                 "evaluator":[evaluator_fail(), evaluator_pass()],
                 "fixer":[{"summary":"fixed"}],
             })
             out = ProRunner(target, ex).run("build x", guardian="guarded")
             self.assertTrue(out["done"])
             roles = [c["role"] for c in ex.calls]
-            self.assertIn("architect", roles); self.assertIn("tester", roles); self.assertIn("fixer", roles)
+            self.assertIn("architect", roles)
+            self.assertIn("tester", roles)
+            self.assertIn("fixer", roles)
 
     def test_factory_validates_task_graph_and_system_gates(self):
         with tempfile.TemporaryDirectory() as td:
@@ -67,7 +74,10 @@ class ProfileTests(unittest.TestCase):
                 "planner":[planner_ok()],
                 "architect":[{"artifacts":{"ARCHITECTURE.md":"arch","TASKS.json":task_graph}}],
                 "worker":[{"summary":"t1"},{"summary":"t2"}],
-                "task_evaluator":[{"task_result":{"status":"PASS"}},{"task_result":{"status":"PASS"}}],
+                "task_evaluator":[
+                    {"task_result":{"status":"PASS"},"evidence":[{"id":"TE-1","kind":"task","ok":True,"detail":"T1 verified"}]},
+                    {"task_result":{"status":"PASS"},"evidence":[{"id":"TE-2","kind":"task","ok":True,"detail":"T2 verified"}]},
+                ],
                 "integrator":[{"summary":"integrated"}],
                 "system_tester":[{"evidence":[{"id":"SYS-1","kind":"test","ok":True,"detail":"system"}]}],
                 "evaluator":[evaluator_pass()],
@@ -81,4 +91,20 @@ class ProfileTests(unittest.TestCase):
             task_eval_sessions=[c["session"] for c in ex.calls if c["role"]=="task_evaluator"]
             self.assertEqual(len(task_eval_sessions),len(set(task_eval_sessions)))
 
-if __name__ == "__main__": unittest.main()
+    def test_factory_task_pass_without_positive_evidence_is_rejected(self):
+        with tempfile.TemporaryDirectory() as td:
+            target=Path(td)
+            task_graph={"tasks":[{"id":"T1","title":"x","profile":"lite","depends_on":[]}]}
+            ex=ScriptedExecutor({
+                "planner":[planner_ok()],
+                "architect":[{"artifacts":{"ARCHITECTURE.md":"arch","TASKS.json":task_graph}}],
+                "worker":[{"summary":"attempt1"},{"summary":"attempt2"}],
+                "task_evaluator":[{"task_result":{"status":"PASS"}},{"task_result":{"status":"PASS"}}],
+            })
+            out=FactoryRunner(target,ex).run("big system",guardian="guarded")
+            self.assertFalse(out["done"])
+            self.assertEqual(out["extra"]["blocked_task"],"T1")
+
+
+if __name__ == "__main__":
+    unittest.main()
