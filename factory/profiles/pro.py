@@ -13,10 +13,7 @@ class ProRunner(BaseRunner):
     def _technical_gate(result) -> dict:
         evidence = [item for item in (result.get("evidence") or []) if isinstance(item, dict)]
         explicit = [item.get("ok") for item in evidence if "ok" in item]
-        return {
-            "name": "technical_tests",
-            "ok": bool(explicit) and all(value is True for value in explicit),
-        }
+        return {"name": "technical_tests", "ok": bool(explicit) and all(value is True for value in explicit)}
 
     def run(self, request: str, guardian="guarded", domain="code", run_id=None, max_passes=5):
         max_passes = max(1, min(int(max_passes), 5))
@@ -27,24 +24,11 @@ class ProRunner(BaseRunner):
         history: list[dict] = []
 
         try:
-            if not (run.run_dir / "CONTRACT.json").exists():
-                state.transition(Phase.PLANNING)
-                self._dispatch(
-                    run,
-                    role_for(domain, "planner"),
-                    {"request": request, "mode": "plan", "profile": "pro"},
-                    context,
-                )
-                self._seal(run)
+            self._ensure_contract(run, state, context, request, domain, "pro")
 
             if not (run.run_dir / "ARCHITECTURE.md").exists():
                 state.transition(Phase.ARCHITECTURE)
-                self._dispatch(
-                    run,
-                    "architect",
-                    {"mode": "architecture", "profile": "pro"},
-                    context,
-                )
+                self._dispatch(run, "architect", {"mode": "architecture", "profile": "pro"}, context)
                 journal.append("ARCHITECTURE_COMPLETED")
 
             build_checkpoint = run.run_dir / "checkpoints" / "build.json"
@@ -90,15 +74,13 @@ class ProRunner(BaseRunner):
                 findings = self._findings(run)
                 gate = self._gate(run, [last_test_gate])
                 passed, total = detector.score(rubric)
-                history.append(
-                    {
-                        "passed": passed,
-                        "total": total,
-                        "open_findings": sum(
-                            1 for item in findings if str(item.get("status", "open")).lower() == "open"
-                        ),
-                    }
-                )
+                history.append({
+                    "passed": passed,
+                    "total": total,
+                    "open_findings": sum(
+                        1 for item in findings if str(item.get("status", "open")).lower() == "open"
+                    ),
+                })
                 journal.append(
                     "EVALUATION_COMPLETED",
                     pass_no=pass_no,
@@ -153,7 +135,11 @@ class ProRunner(BaseRunner):
                             finding_ids=[item.get("id") for item in pending],
                         )
                     else:
-                        journal.append("REVERIFY_WITHOUT_FIX", pass_no=pass_no, reason="no_actionable_findings")
+                        journal.append(
+                            "REVERIFY_WITHOUT_FIX",
+                            pass_no=pass_no,
+                            reason="no_actionable_findings",
+                        )
 
                 if progress.get("stalled") and rediagnosed and pass_no >= 3:
                     journal.append("PRO_STALLED", pass_no=pass_no, history=history)
@@ -161,11 +147,20 @@ class ProRunner(BaseRunner):
 
             gate = self._gate(run, [last_test_gate])
             state.transition(Phase.PAUSED, status="incomplete", escalation="factory")
-            journal.append("ESCALATION_RECOMMENDED", from_profile="pro", to_profile="factory", failures=gate["failures"])
+            journal.append(
+                "ESCALATION_RECOMMENDED",
+                from_profile="pro",
+                to_profile="factory",
+                failures=gate["failures"],
+            )
             return self._write_report(
                 run,
                 gate,
-                {"passes": int(state.load().get("pass", max_passes)), "progress": history, "escalation": "factory"},
+                {
+                    "passes": int(state.load().get("pass", max_passes)),
+                    "progress": history,
+                    "escalation": "factory",
+                },
             )
         except AgentDispatchError as exc:
             return self._abort(run, state, exc, state.load().get("phase", "pro"))
