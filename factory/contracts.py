@@ -34,11 +34,7 @@ def normalize_rubric(value: Any) -> list[dict[str, Any]]:
         if not description:
             raise ContractError(f"rubric criterion {criterion_id} is missing a binary criterion/description")
         required = bool(raw.get("required", True))
-        item: dict[str, Any] = {
-            "id": criterion_id,
-            "required": required,
-            "criterion": description,
-        }
+        item: dict[str, Any] = {"id": criterion_id, "required": required, "criterion": description}
         verification = raw.get("verification") or raw.get("verify")
         if verification:
             item["verification"] = verification
@@ -76,7 +72,6 @@ def seal_contract(run_dir: Path) -> dict[str, Any]:
         raise ContractError("SPEC.md is empty")
     if not rubric_path.exists():
         raise ContractError("Planner did not produce RUBRIC.json")
-
     try:
         draft = json.loads(rubric_path.read_text(encoding="utf-8"))
     except Exception as exc:
@@ -87,8 +82,6 @@ def seal_contract(run_dir: Path) -> dict[str, Any]:
     spec_text = spec + "\n"
     baseline_text = json.dumps(baseline, indent=2, sort_keys=True) + "\n"
 
-    # Normalize the Planner's files exactly once before hashing, so harmless
-    # trailing whitespace cannot create an immediate false tamper signal.
     if not contract_path.exists():
         spec_path.write_text(spec_text, encoding="utf-8")
         rubric_path.write_text(json.dumps({"criteria": criteria}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -162,19 +155,66 @@ def baseline_criteria(run_dir: Path) -> list[dict[str, Any]]:
         return []
 
 
-def status_map(run_dir: Path) -> dict[str, dict[str, Any]]:
-    path = Path(run_dir) / "RUBRIC_STATUS.json"
+def validated_status_map(
+    run_dir: Path,
+    criteria: list[dict[str, Any]] | None = None,
+) -> tuple[dict[str, dict[str, Any]], list[str]]:
+    """Validate evaluator status as a snapshot of the sealed rubric.
+
+    Unknown or duplicate criterion IDs are rejected instead of silently being
+    overwritten/ignored. This prevents an evaluator from reshaping the contract
+    through RUBRIC_STATUS.json.
+    """
+    run_dir = Path(run_dir)
+    path = run_dir / "RUBRIC_STATUS.json"
+    criteria = criteria if criteria is not None else baseline_criteria(run_dir)
+    baseline_ids = {str(item["id"]) for item in criteria}
+    failures: list[str] = []
     if not path.exists():
-        return {}
+        return {}, ["status:missing"]
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
-        return {}
-    rows = value.get("criteria", value) if isinstance(value, dict) else value
+        return {}, ["status:invalid_json"]
+    rows = value.get("criteria") if isinstance(value, dict) else value
     if not isinstance(rows, list):
-        return {}
+        return {}, ["status:invalid_shape"]
+
     out: dict[str, dict[str, Any]] = {}
-    for raw in rows:
-        if isinstance(raw, dict) and raw.get("id"):
-            out[str(raw["id"])] = raw
-    return out
+    seen: set[str] = set()
+    for index, raw in enumerate(rows):
+        if not isinstance(raw, dict):
+            failures.append(f"status:invalid_row:{index}")
+            continue
+        criterion_id = str(raw.get("id") or "").strip()
+        if not criterion_id:
+            failures.append(f"status:missing_id:{index}")
+            continue
+        if criterion_id in seen:
+            failures.append(f"status:duplicate_id:{criterion_id}")
+            continue
+        seen.add(criterion_id)
+        if criterion_id not in baseline_ids:
+            failures.append(f"status:unknown_id:{criterion_id}")
+            continue
+        state = str(raw.get("status") or "UNVERIFIED").upper()
+        if state not in {"PASS", "FAIL", "UNVERIFIED"}:
+            failures.append(f"status:invalid_state:{criterion_id}:{state}")
+            continue
+        evidence = raw.get("evidence", raw.get("evidence_ref", []))
+        if evidence is None:
+            evidence = []
+        if isinstance(evidence, str):
+            evidence = [evidence]
+        if not isinstance(evidence, list) or any(not isinstance(ref, str) or not ref.strip() for ref in evidence):
+            failures.append(f"status:invalid_evidence_refs:{criterion_id}")
+            continue
+        out[criterion_id] = {**raw, "id": criterion_id, "status": state, "evidence": evidence}
+    return out, failures
+
+
+def status_map(run_dir: Path) -> dict[str, dict[str, Any]]:
+    # Compatibility helper for reports/progress. Final Gate uses the validated
+    # form and therefore never silently accepts malformed status snapshots.
+    mapping, _ = validated_status_map(run_dir)
+    return mapping
