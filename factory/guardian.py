@@ -4,18 +4,24 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
+
 class Decision(str, Enum):
-    ALLOW="allow"; WARN="warn"; REQUIRE_APPROVAL="require_approval"; BLOCK="block"
+    ALLOW = "allow"
+    WARN = "warn"
+    REQUIRE_APPROVAL = "require_approval"
+    BLOCK = "block"
+
 
 @dataclass
 class CommandDecision:
     decision: Decision
     reason: str
 
-class Guardian:
-    """Deterministic policy layer shared by the runtime and Claude hook."""
 
-    UNIVERSAL_BLOCK=[
+class Guardian:
+    """Deterministic policy layer shared by runtime and Claude PreToolUse hook."""
+
+    UNIVERSAL_BLOCK = [
         re.compile(r"(^|\s)rm\s+-rf\s+/($|\s)"),
         re.compile(r"git\s+push\s+.*--force.*\b(main|master)\b"),
         re.compile(r"git\s+reset\s+--hard\s+origin/(main|master)"),
@@ -23,96 +29,157 @@ class Guardian:
         re.compile(r"\bdd\s+if=.*\bof=/dev/"),
         re.compile(r"\b(shutdown|reboot|halt|poweroff)\b"),
     ]
-    PROD_PATTERNS=[re.compile(x,re.I) for x in [
-        r"kubectl\s+(apply|delete|replace|patch)", r"terraform\s+(apply|destroy)",
-        r"\bDROP\s+DATABASE\b", r"\bDROP\s+TABLE\b", r"\bTRUNCATE\s+TABLE\b",
-        r"\bproduction\b", r"\bprod\b", r"git\s+push\b",
+    PROD_PATTERNS = [re.compile(pattern, re.I) for pattern in [
+        r"kubectl\s+(apply|delete|replace|patch)",
+        r"terraform\s+(apply|destroy)",
+        r"\bDROP\s+DATABASE\b",
+        r"\bDROP\s+TABLE\b",
+        r"\bTRUNCATE\s+TABLE\b",
+        r"\bproduction\b",
+        r"\bprod\b",
+        r"git\s+push\b",
     ]]
-    PROTECTED_WRITE_PREFIXES=(".git/", ".claude/", ".codex/", ".aah/runtime/", ".aah/bin/")
-    PROTECTED_READ_PREFIXES=(".git/", ".aah/runtime/", ".aah/bin/")
-    SENSITIVE_HOME_PARTS=("/.ssh/", "/.aws/", "/.config/gcloud/", "/.azure/", "/.kube/config")
-    ARTIFACT_ONLY_ROLES={
-        "planner","architect","tester","evaluator","task_evaluator","system_tester",
-        "security_reviewer","final_reviewer","content_strategist","content_evaluator","fact_checker"
+    PROTECTED_WRITE_PREFIXES = (".git/", ".claude/", ".codex/", ".aah/runtime/", ".aah/bin/")
+    PROTECTED_READ_PREFIXES = (".git/", ".aah/runtime/", ".aah/bin/")
+    SENSITIVE_HOME_PARTS = ("/.ssh/", "/.aws/", "/.config/gcloud/", "/.azure/", "/.kube/config")
+
+    ARTIFACT_ONLY_ROLES = {
+        "planner", "architect", "tester", "evaluator", "task_evaluator", "system_tester",
+        "security_reviewer", "final_reviewer", "content_strategist", "content_evaluator", "fact_checker",
     }
-    REVIEW_SAFE_COMMANDS=[re.compile(x,re.I) for x in [
-        r"^pwd$", r"^ls(?:\s|$)", r"^git\s+(status|diff|log|show|rev-parse)(?:\s|$)",
+    ROLE_RUN_WRITES: dict[str, set[str]] = {
+        "planner": {"SPEC.md", "RUBRIC.json", "PLANNING_REPORT.md"},
+        "content_strategist": {"SPEC.md", "RUBRIC.json", "PLANNING_REPORT.md"},
+        "architect": {"ARCHITECTURE.md", "TASKS.json", "ARCHITECTURE_REPORT.md"},
+        "tester": {"TEST_REPORT.md"},
+        "evaluator": {"RUBRIC_STATUS.json", "FINDINGS.json", "FINDINGS.md", "EVALUATION_REPORT.md"},
+        "content_evaluator": {"RUBRIC_STATUS.json", "FINDINGS.json", "FINDINGS.md", "EVALUATION_REPORT.md", "SYSTEM_TEST_REPORT.md"},
+        "fact_checker": {"RUBRIC_STATUS.json", "FINDINGS.json", "FINDINGS.md", "EVALUATION_REPORT.md", "SYSTEM_TEST_REPORT.md"},
+        "system_tester": {"SYSTEM_TEST_REPORT.md"},
+        "security_reviewer": {"SECURITY_REPORT.md"},
+        "final_reviewer": {"REVIEW_REPORT.md"},
+        "task_evaluator": {"RUBRIC_STATUS.json", "FINDINGS.json", "FINDINGS.md", "EVALUATION_REPORT.md", "TASK_RUBRIC_STATUS.json", "TASK_FINDINGS.json", "TASK_FINDINGS.md", "TASK_EVALUATION_REPORT.md"},
+    }
+    RUNTIME_OWNED_BASENAMES = {
+        "STATE.json", "REQUEST.json", "EVENTS.jsonl", "AGENTS.jsonl", "EVIDENCE.jsonl",
+        "CONTRACT.json", "RUBRIC_BASELINE.json", "FINAL_REPORT.json", "FINAL_REPORT.md",
+    }
+
+    REVIEW_SAFE_COMMANDS = [re.compile(pattern, re.I) for pattern in [
+        r"^pwd$",
+        r"^ls(?:\s|$)",
+        r"^git\s+(status|diff|log|show|rev-parse)(?:\s|$)",
         r"^(rg|grep|head|tail|wc)\s",
-        r"^(python|python3)\s+-m\s+(pytest|unittest)(?:\s|$)", r"^pytest(?:\s|$)",
+        r"^(python|python3)\s+-m\s+(pytest|unittest)(?:\s|$)",
+        r"^pytest(?:\s|$)",
         r"^npm\s+(test|run\s+(test|lint|build|typecheck|check|dev|start))(?:\s|$)",
         r"^pnpm\s+(test|run\s+(test|lint|build|typecheck|check|dev|start))(?:\s|$)",
         r"^yarn\s+(test|run\s+(test|lint|build|typecheck|check|dev|start))(?:\s|$)",
         r"^bun\s+(test|run\s+(test|lint|build|typecheck|check|dev|start))(?:\s|$)",
-        r"^cargo\s+(test|check|build)(?:\s|$)", r"^go\s+test(?:\s|$)",
+        r"^cargo\s+(test|check|build)(?:\s|$)",
+        r"^go\s+test(?:\s|$)",
         r"^(npx\s+)?playwright\s+test(?:\s|$)",
+        r"^ffprobe\s+[^;&|`<>]+$",
         r"^curl\s+[^;&|`]*https?://(127\.0\.0\.1|localhost)(:\d+)?(?:/[^\s]*)?(?:\s|$)",
     ]]
 
-    def __init__(self, mode: str="guarded"): self.mode=mode if mode in {"open","guarded","locked"} else "guarded"
+    def __init__(self, mode: str = "guarded"):
+        self.mode = mode if mode in {"open", "guarded", "locked"} else "guarded"
 
     @staticmethod
     def normalize_role(role: str | None) -> str | None:
-        if not role: return None
-        role=role.strip().lower().replace("-","_")
-        if role.startswith("aah_"): role=role[4:]
-        return role
+        if not role:
+            return None
+        value = role.strip().lower().replace("-", "_")
+        return value[4:] if value.startswith("aah_") else value
 
     @staticmethod
     def _sensitive_command_text(command: str) -> bool:
-        normalized=command.replace("\\","/").lower()
-        return any(x in normalized for x in [".env", "/.ssh/", "/.aws/", "/.config/gcloud/", "/.azure/", "/.kube/config"])
+        normalized = command.replace("\\", "/").lower()
+        return any(token in normalized for token in [".env", "/.ssh/", "/.aws/", "/.config/gcloud/", "/.azure/", "/.kube/config"])
 
-    def _artifact_role_command(self, command: str, role: str) -> CommandDecision | None:
-        compact=command.strip()
+    def _artifact_role_command(self, command: str, role: str) -> CommandDecision:
+        compact = command.strip()
         if self._sensitive_command_text(compact):
-            return CommandDecision(Decision.BLOCK,f"{role} cannot read sensitive paths from shell")
-        # Chaining/subshells make a read-only allowlist ambiguous; reviewers issue one verification command per tool call.
-        if any(tok in compact for tok in [";","&&","||","`","$(",">","<"]):
-            return CommandDecision(Decision.BLOCK,f"{role} shell command is outside the verification allowlist")
-        if any(p.search(compact) for p in self.REVIEW_SAFE_COMMANDS):
-            return CommandDecision(Decision.ALLOW,"artifact-only verification command")
-        return CommandDecision(Decision.BLOCK,f"{role} may only run bounded verification commands")
+            return CommandDecision(Decision.BLOCK, f"{role} cannot access sensitive paths from shell")
+        if any(token in compact for token in [";", "&&", "||", "`", "$(", ">", "<"]):
+            return CommandDecision(Decision.BLOCK, f"{role} shell command is outside the verification allowlist")
+        if any(pattern.search(compact) for pattern in self.REVIEW_SAFE_COMMANDS):
+            return CommandDecision(Decision.ALLOW, "bounded verification command")
+        return CommandDecision(Decision.BLOCK, f"{role} may only run bounded verification commands")
 
-    def classify_command(self, command: str, role: str | None=None) -> CommandDecision:
-        for p in self.UNIVERSAL_BLOCK:
-            if p.search(command): return CommandDecision(Decision.BLOCK,"universal destructive action")
-        normalized=self.normalize_role(role)
+    def classify_command(self, command: str, role: str | None = None) -> CommandDecision:
+        for pattern in self.UNIVERSAL_BLOCK:
+            if pattern.search(command):
+                return CommandDecision(Decision.BLOCK, "universal destructive action")
+        normalized = self.normalize_role(role)
         if normalized in self.ARTIFACT_ONLY_ROLES:
-            return self._artifact_role_command(command,normalized)
-        if re.search(r"\b(curl|wget)\b[^|]*\|\s*(bash|sh)\b",command):
-            if self.mode=="locked": return CommandDecision(Decision.BLOCK,"remote pipe-to-shell blocked in LOCKED")
-            if self.mode=="guarded": return CommandDecision(Decision.REQUIRE_APPROVAL,"remote pipe-to-shell requires approval")
-            return CommandDecision(Decision.WARN,"remote pipe-to-shell is risky")
-        if any(p.search(command) for p in self.PROD_PATTERNS):
-            if self.mode=="locked": return CommandDecision(Decision.REQUIRE_APPROVAL,"production-sensitive action")
-            if self.mode=="guarded": return CommandDecision(Decision.WARN,"production-sensitive action")
-        return CommandDecision(Decision.ALLOW,"routine command")
+            return self._artifact_role_command(command, normalized)
+        if re.search(r"\b(curl|wget)\b[^|]*\|\s*(bash|sh)\b", command):
+            if self.mode == "locked":
+                return CommandDecision(Decision.BLOCK, "remote pipe-to-shell blocked in LOCKED")
+            if self.mode == "guarded":
+                return CommandDecision(Decision.REQUIRE_APPROVAL, "remote pipe-to-shell requires approval")
+            return CommandDecision(Decision.WARN, "remote pipe-to-shell is risky")
+        if any(pattern.search(command) for pattern in self.PROD_PATTERNS):
+            if self.mode == "locked":
+                return CommandDecision(Decision.REQUIRE_APPROVAL, "production-sensitive action")
+            if self.mode == "guarded":
+                return CommandDecision(Decision.WARN, "production-sensitive action")
+        return CommandDecision(Decision.ALLOW, "routine command")
 
     @staticmethod
-    def _clean(path: str, root: str | None=None) -> str:
-        p=path.replace("\\","/")
-        if root:
-            try: p=str(Path(p).resolve().relative_to(Path(root).resolve())).replace("\\","/")
-            except Exception: pass
-        while p.startswith("./"): p=p[2:]
-        return p
+    def _resolve_inside(path: str, root: str | None) -> tuple[Path | None, str | None]:
+        if not path or not root:
+            return None, None
+        root_path = Path(root).resolve()
+        raw = Path(path)
+        resolved = (raw if raw.is_absolute() else root_path / raw).resolve()
+        try:
+            relative = resolved.relative_to(root_path)
+        except ValueError:
+            return resolved, None
+        return resolved, relative.as_posix()
 
     @staticmethod
-    def _env_path(clean: str) -> bool:
-        name=Path(clean).name; return name==".env" or name.startswith(".env.")
+    def _env_path(relative: str) -> bool:
+        name = Path(relative).name
+        return name == ".env" or name.startswith(".env.")
 
-    def can_read(self, path: str, root: str|None=None) -> bool:
-        clean=self._clean(path,root); absolute=path.replace("\\","/")
-        if self._env_path(clean): return False
-        if any(x in absolute for x in self.SENSITIVE_HOME_PARTS): return False
-        if clean.startswith(self.PROTECTED_READ_PREFIXES): return False
+    def can_read(self, path: str, root: str | None = None) -> bool:
+        resolved, relative = self._resolve_inside(path, root)
+        if resolved is None or relative is None:
+            return False
+        absolute = resolved.as_posix()
+        if self._env_path(relative):
+            return False
+        if any(token in absolute for token in self.SENSITIVE_HOME_PARTS):
+            return False
+        if relative.startswith(self.PROTECTED_READ_PREFIXES):
+            return False
         return True
 
-    def can_write(self, path: str, root: str|None=None, role: str|None=None) -> bool:
-        clean=self._clean(path,root); absolute=path.replace("\\","/"); normalized=self.normalize_role(role)
-        if normalized in self.ARTIFACT_ONLY_ROLES and not clean.startswith(".aah/runs/"): return False
-        if self._env_path(clean): return False
-        if any(x in absolute for x in self.SENSITIVE_HOME_PARTS): return False
-        if clean.startswith(self.PROTECTED_WRITE_PREFIXES): return False
-        if clean.startswith(".aah/") and not clean.startswith(".aah/runs/"): return False
+    def can_write(self, path: str, root: str | None = None, role: str | None = None) -> bool:
+        resolved, relative = self._resolve_inside(path, root)
+        if resolved is None or relative is None:
+            return False
+        absolute = resolved.as_posix()
+        normalized = self.normalize_role(role)
+        if self._env_path(relative):
+            return False
+        if any(token in absolute for token in self.SENSITIVE_HOME_PARTS):
+            return False
+        if relative.startswith(self.PROTECTED_WRITE_PREFIXES):
+            return False
+        if relative.startswith(".aah/") and not relative.startswith(".aah/runs/"):
+            return False
+
+        if normalized in self.ARTIFACT_ONLY_ROLES:
+            if not relative.startswith(".aah/runs/"):
+                return False
+            basename = Path(relative).name
+            if basename in self.RUNTIME_OWNED_BASENAMES:
+                return False
+            allowed = self.ROLE_RUN_WRITES.get(normalized, set())
+            return basename in allowed
         return True
