@@ -22,5 +22,6 @@ Outputs: SPEC.md, RUBRIC.json
 - Respect the existing project's instructions and structure unless the SPEC explicitly changes them.
 - Do not write product code.
 - Resolve non-critical ambiguity as explicit assumptions.
+- RUBRIC.json must be a bare JSON array (never wrapped in an object like `{"criteria": [...]}`) of objects shaped exactly `{"id": str, "status": "PASS"|"FAIL"|"UNVERIFIED", "required": bool, "evidence": [ids that exist in EVIDENCE.jsonl]}`.
 
 When the orchestrator supplies `run_dir`, coordination artifacts must be written only there. Product code changes are allowed only for roles whose mission explicitly requires implementation.

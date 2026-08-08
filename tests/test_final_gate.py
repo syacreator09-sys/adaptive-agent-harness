@@ -92,4 +92,17 @@ class FinalGateTests(unittest.TestCase):
             result = FinalGate(run).evaluate(rubric, findings=[])
             self.assertTrue(result["done"])
 
+    def test_verdict_key_and_evidence_ids_key_are_also_admissible(self):
+        """A fourth real evaluator (RUN-20260807-008) used "verdict"
+        instead of "status" AND "evidence_ids" instead of any of the
+        three evidence-key variants already covered -- confirming this
+        is a genuinely recurring schema-drift problem, not a one-off."""
+        with tempfile.TemporaryDirectory() as td:
+            run = Path(td)
+            ev = EvidenceStore(run)
+            ev.append({"id":"ev3-05","kind":"test","detail":"ok"})
+            rubric = [{"id":"C1","required":True,"verdict":"PASS","evidence_ids":["ev3-05"]}]
+            result = FinalGate(run).evaluate(rubric, findings=[])
+            self.assertTrue(result["done"])
+
 if __name__ == "__main__": unittest.main()

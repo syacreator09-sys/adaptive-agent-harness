@@ -3,6 +3,24 @@ from pathlib import Path
 from typing import Any
 from .evidence import EvidenceStore
 
+# Across 3 real evaluator runs (2026-08-07, RUN-004/006/007/008) the exact
+# same semantic field came back under 4 different names for evidence
+# pointers and 2 for the pass/fail verdict -- none pinned anywhere in
+# agents.py or .claude/agents/*.md, so a fresh evaluator invents a
+# plausible-sounding name each time. Aliased here as a safety net;
+# .claude/agents/aah-evaluator.md now also pins the canonical shape so
+# future runs converge instead of the alias list growing forever.
+_EVIDENCE_KEYS = ("evidence", "evidence_ref", "evidence_refs", "evidence_ids")
+_STATUS_KEYS = ("status", "verdict")
+
+def _normalize_item(item: dict[str,Any]) -> dict[str,Any]:
+    item = dict(item)
+    for key in _STATUS_KEYS:
+        if item.get(key): item["status"] = item[key]; break
+    for key in _EVIDENCE_KEYS:
+        if item.get(key): item["evidence"] = item[key]; break
+    return item
+
 def _normalize_rubric(rubric: Any) -> list[dict[str,Any]]:
     # Neither agents.py nor the .claude/agents/*.md contracts pin down
     # RUBRIC.json's exact top-level shape -- confirmed live (plan
@@ -18,7 +36,7 @@ def _normalize_rubric(rubric: Any) -> list[dict[str,Any]]:
     if isinstance(rubric, dict):
         rubric = rubric.get("criteria", rubric.get("items", []))
     if not isinstance(rubric, list): return []
-    return [item if isinstance(item, dict) else {"id": str(item), "status": "UNVERIFIED"} for item in rubric]
+    return [_normalize_item(item) if isinstance(item, dict) else {"id": str(item), "status": "UNVERIFIED"} for item in rubric]
 
 def _normalize_findings(findings: Any) -> list[dict[str,Any]]:
     # Same unpinned-schema failure class as _normalize_rubric, hit by the
@@ -56,11 +74,7 @@ class FinalGate:
             if not item.get("required",True): continue
             status=str(item.get("status","UNVERIFIED")).upper()
             if status!="PASS": failures.append(f"{item.get('id')}:status={status}")
-            # Three distinct real evaluators, three distinct field names for
-            # the identical concept ("evidence", RUN-20260807-004's
-            # "evidence_ref", RUN-20260807-007's "evidence_refs") -- none
-            # pinned anywhere in agents.py or .claude/agents/*.md. Accept all.
-            refs=item.get("evidence") or item.get("evidence_ref") or item.get("evidence_refs") or []
+            refs=item.get("evidence") or []
             if not refs: failures.append(f"{item.get('id')}:missing_evidence")
             elif any(str(x) not in evidence_refs for x in refs): failures.append(f"{item.get('id')}:invalid_evidence")
         for f in findings:
