@@ -1,11 +1,13 @@
 import json
+import os
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from factory.artifacts import ArtifactStore
-from factory.evidence import EvidenceStore
+from factory.evidence import EvidenceStore, redact_data
 from factory.final_gate import FinalGate
 from factory.progress import ProgressDetector
 from factory.project_adapter import ProjectAdapter
@@ -48,6 +50,20 @@ class AuditRegressionTests(unittest.TestCase):
             self.assertFalse(result["done"])
             self.assertIn("evidence:invalid_jsonl",result["failures"])
 
+    def test_structured_and_known_secret_values_are_redacted(self):
+        secret="super-secret-value-123"
+        with mock.patch.dict(os.environ,{"SERVICE_TOKEN":secret},clear=False):
+            value=redact_data({
+                "api_key":"raw-key",
+                "detail":f"returned {secret}",
+                "nested":{"password":"pw12345"},
+            })
+        text=json.dumps(value)
+        self.assertNotIn(secret,text)
+        self.assertNotIn("raw-key",text)
+        self.assertNotIn("pw12345",text)
+        self.assertIn("[REDACTED]",text)
+
     def test_progress_accepts_wrapped_rubric(self):
         score=ProgressDetector.score({"criteria":[{"id":"R1","required":True,"status":"PASS"}]})
         self.assertEqual(score,(1,1))
@@ -80,6 +96,13 @@ class AuditRegressionTests(unittest.TestCase):
             runner._ingest(run,{"_aah_role":"builder","artifacts":{"RUBRIC.json":[]},"evidence":[]})
             findings=runner._findings(run)
             self.assertTrue(any(str(f.get("id","")).startswith("F-POLICY-builder") for f in findings))
+
+    def test_agent_artifact_secret_is_redacted_before_persistence(self):
+        with tempfile.TemporaryDirectory() as td:
+            target=Path(td); runner=LiteRunner(target,ScriptedExecutor({})); run=runner._new("x","open","code")
+            with mock.patch.dict(os.environ,{"SERVICE_TOKEN":"do-not-store-this"},clear=False):
+                runner._ingest(run,{"_aah_role":"planner","artifacts":{"SPEC.md":"token=do-not-store-this"},"evidence":[]})
+            self.assertNotIn("do-not-store-this",(run.run_dir/"SPEC.md").read_text())
 
     def test_project_adapter_detects_linked_worktree(self):
         with tempfile.TemporaryDirectory() as td:
