@@ -56,7 +56,11 @@ class FinalGate:
             if not item.get("required",True): continue
             status=str(item.get("status","UNVERIFIED")).upper()
             if status!="PASS": failures.append(f"{item.get('id')}:status={status}")
-            refs=item.get("evidence") or item.get("evidence_ref") or []
+            # Three distinct real evaluators, three distinct field names for
+            # the identical concept ("evidence", RUN-20260807-004's
+            # "evidence_ref", RUN-20260807-007's "evidence_refs") -- none
+            # pinned anywhere in agents.py or .claude/agents/*.md. Accept all.
+            refs=item.get("evidence") or item.get("evidence_ref") or item.get("evidence_refs") or []
             if not refs: failures.append(f"{item.get('id')}:missing_evidence")
             elif any(str(x) not in evidence_refs for x in refs): failures.append(f"{item.get('id')}:invalid_evidence")
         for f in findings:

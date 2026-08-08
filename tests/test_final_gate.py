@@ -79,4 +79,17 @@ class FinalGateTests(unittest.TestCase):
             result = FinalGate(run).evaluate(rubric, findings=[])
             self.assertTrue(result["done"])
 
+    def test_evidence_refs_plural_key_is_also_admissible(self):
+        """A third real evaluator (RUN-20260807-007) used "evidence_refs"
+        (plural) -- a third distinct field name for the same concept,
+        none of the three ("evidence", "evidence_ref", "evidence_refs")
+        pinned anywhere in agents.py or .claude/agents/*.md."""
+        with tempfile.TemporaryDirectory() as td:
+            run = Path(td)
+            ev = EvidenceStore(run)
+            ev.append({"id":"EV-01","kind":"test","detail":"ok"})
+            rubric = [{"id":"R-1","status":"PASS","required":True,"evidence_refs":["EV-01"]}]
+            result = FinalGate(run).evaluate(rubric, findings=[])
+            self.assertTrue(result["done"])
+
 if __name__ == "__main__": unittest.main()
