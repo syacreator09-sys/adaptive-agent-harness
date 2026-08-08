@@ -211,10 +211,37 @@ class CodexProvider(BaseProvider):
 
 
 def parse_agent_payload(text: str, provider: str) -> dict[str, Any]:
+    # Real bug found live (2026-08-08, rebasing hardening/lite-pro-factory-v2
+    # onto main): a real LITE planner produced a rich, correct SPEC.md whose
+    # own text embeds ```python/```bash code fences. The old extraction
+    # (`text.split("```json",1)[1].split("```",1)[0]`) takes the FIRST "```"
+    # after the opening fence as the close -- for any agent response whose
+    # JSON string VALUES contain their own triple-backtick fences (near
+    # guaranteed for a real SPEC.md/PLANNING_REPORT.md with code examples),
+    # this truncates mid-string, json.loads() raises, and the whole payload
+    # silently degrades to {"artifacts": {}, "evidence": []} with the raw
+    # text dumped as "summary" -- no crash, no obvious symptom, just every
+    # real artifact discarded and (downstream) "Planner did not produce
+    # SPEC.md" with no pointer back to this function. Reproduced directly:
+    # parse_agent_payload of a fenced JSON payload whose artifacts.SPEC.md
+    # value contains one embedded code block returns artifacts={}.
+    #
+    # Fixed by also trying the LAST "```" in the text as the closing
+    # delimiter (rfind) -- correct whenever the model's reply is "prose,
+    # then exactly one fenced JSON object, nothing after" (the documented
+    # agent contract: "Return one JSON object"), which covers the real
+    # failure above without weakening the existing first-close candidate
+    # (tried first, so the common no-nested-fences case is unaffected).
     text = str(text or "").strip()
     candidates = [text]
     if "```json" in text:
-        candidates.append(text.split("```json", 1)[1].split("```", 1)[0])
+        start = text.index("```json") + len("```json")
+        first_close = text.find("```", start)
+        if first_close != -1:
+            candidates.append(text[start:first_close])
+        last_close = text.rfind("```")
+        if last_close != -1 and last_close != first_close and last_close > start:
+            candidates.append(text[start:last_close])
     for candidate in candidates:
         try:
             value = json.loads(candidate)

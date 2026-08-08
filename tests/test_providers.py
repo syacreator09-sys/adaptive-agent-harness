@@ -4,8 +4,49 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
-from factory.providers import ClaudeProvider, CodexProvider, ProviderRegistry, ProviderError
+from factory.providers import ClaudeProvider, CodexProvider, ProviderRegistry, ProviderError, parse_agent_payload
 from factory.codex_profiles import install_profiles
+
+
+class ParseAgentPayloadTests(unittest.TestCase):
+    def test_simple_fenced_json_with_no_nested_fences(self):
+        text = 'Here you go.\n```json\n{"summary": "ok", "artifacts": {"A.md": "x"}}\n```\n'
+        result = parse_agent_payload(text, "claude")
+        self.assertEqual(result["artifacts"], {"A.md": "x"})
+
+    def test_bare_json_with_no_fence_at_all(self):
+        text = json.dumps({"summary": "ok", "artifacts": {"A.md": "x"}})
+        result = parse_agent_payload(text, "claude")
+        self.assertEqual(result["artifacts"], {"A.md": "x"})
+
+    def test_fenced_json_whose_string_value_embeds_its_own_code_fence(self):
+        """Real bug found live (2026-08-08): a real LITE planner returned a
+        SPEC.md artifact containing its own ```python code block. The old
+        extraction (first "```" after the opening fence as the close)
+        truncated mid-string on that inner fence, json.loads() raised, and
+        the whole payload silently degraded to artifacts={} -- the planner's
+        real, correct SPEC.md was discarded and the run aborted with
+        "Planner did not produce SPEC.md", no pointer back to this function.
+        """
+        spec_content = "Fix:\n```python\ndef promedio(x):\n    return sum(x)/len(x)\n```\nDone."
+        payload = {"summary": "ok", "artifacts": {"SPEC.md": spec_content}, "evidence": []}
+        text = "Here is my answer.\n```json\n" + json.dumps(payload) + "\n```\n"
+        result = parse_agent_payload(text, "claude")
+        self.assertEqual(result["artifacts"]["SPEC.md"], spec_content)
+
+    def test_fenced_json_with_multiple_embedded_code_fences(self):
+        spec_content = "```python\na=1\n```\nthen\n```bash\necho hi\n```\n"
+        payload = {"summary": "ok", "artifacts": {"SPEC.md": spec_content}, "evidence": []}
+        text = "```json\n" + json.dumps(payload) + "\n```"
+        result = parse_agent_payload(text, "claude")
+        self.assertEqual(result["artifacts"]["SPEC.md"], spec_content)
+
+    def test_unparseable_text_falls_back_to_summary_with_empty_artifacts(self):
+        text = "I could not complete this task."
+        result = parse_agent_payload(text, "claude")
+        self.assertEqual(result["summary"], text)
+        self.assertEqual(result["artifacts"], {})
+        self.assertEqual(result["evidence"], [])
 
 
 class ProviderCommandTests(unittest.TestCase):
