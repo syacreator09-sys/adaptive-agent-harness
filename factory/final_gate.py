@@ -3,47 +3,105 @@ from pathlib import Path
 from typing import Any
 from .evidence import EvidenceStore
 
-def _normalize_rubric(rubric: Any) -> list[dict[str,Any]]:
-    # Neither agents.py nor the .claude/agents/*.md contracts pin down
-    # RUBRIC.json's exact top-level shape -- confirmed live (plan
-    # AUTONOMÍA TOTAL, 2026-08-07, RUN-20260807-004): a real evaluator
-    # wrote {"criteria": [...], "overall_verdict": ..., ...} instead of
-    # a bare list, and `for item in rubric` iterated the dict's string
-    # KEYS, crashing the whole process with AttributeError on
-    # item.get(...) -- exactly the "gate crashes instead of failing
-    # closed" failure mode already fixed once in evidence.py. Same
-    # remedy: normalize known-reasonable shapes, and treat any item
-    # that still isn't a dict as an UNVERIFIED criterion rather than
-    # raising.
+
+def normalize_rubric(rubric: Any) -> list[dict[str, Any]]:
     if isinstance(rubric, dict):
         rubric = rubric.get("criteria", rubric.get("items", []))
-    if not isinstance(rubric, list): return []
-    return [item if isinstance(item, dict) else {"id": str(item), "status": "UNVERIFIED"} for item in rubric]
+    if not isinstance(rubric, list):
+        return []
+    normalized: list[dict[str, Any]] = []
+    for item in rubric:
+        normalized.append(item if isinstance(item, dict) else {"id": str(item), "status": "UNVERIFIED"})
+    return normalized
+
+
+def normalize_findings(findings: Any) -> list[dict[str, Any]]:
+    if isinstance(findings, dict):
+        findings = findings.get("findings", findings.get("items", []))
+    if not isinstance(findings, list):
+        return []
+    normalized: list[dict[str, Any]] = []
+    for item in findings:
+        normalized.append(item if isinstance(item, dict) else {"id": str(item), "severity": "major", "status": "open"})
+    return normalized
+
+
+def _evidence_refs(item: dict[str, Any]) -> list[str]:
+    raw = item.get("evidence")
+    if raw in (None, "", []):
+        raw = item.get("evidence_ref")
+    if raw in (None, "", []):
+        return []
+    if isinstance(raw, str):
+        return [raw]
+    if isinstance(raw, (list, tuple, set)):
+        return [str(x) for x in raw if x not in (None, "")]
+    return [str(raw)]
+
 
 class FinalGate:
-    def __init__(self, run_dir: Path): self.run_dir=Path(run_dir)
-    def evaluate(self, rubric: list[dict[str,Any]], findings: list[dict[str,Any]], mandatory_gates: list[dict[str,Any]]|None=None) -> dict[str,Any]:
-        rubric=_normalize_rubric(rubric)
-        records=EvidenceStore(self.run_dir).all()
-        failures=[]
-        # Same unresolved-schema gap as the rubric shape above: nothing
-        # documents whether a criterion's evidence pointer is the
-        # EvidenceStore's own "id" or the evidence record's semantic
-        # "type" -- a real evaluator run referenced evidence by "type"
-        # (e.g. "unittest_run"), which is legitimately admissible (it
-        # resolves to a real, redacted EVIDENCE.jsonl record) even
-        # though it isn't a literal "id" match.
-        evidence_refs={str(r.get("id")) for r in records} | {str(r.get("type")) for r in records if r.get("type")}
-        for item in rubric:
-            if not item.get("required",True): continue
-            status=str(item.get("status","UNVERIFIED")).upper()
-            if status!="PASS": failures.append(f"{item.get('id')}:status={status}")
-            refs=item.get("evidence") or item.get("evidence_ref") or []
-            if not refs: failures.append(f"{item.get('id')}:missing_evidence")
-            elif any(str(x) not in evidence_refs for x in refs): failures.append(f"{item.get('id')}:invalid_evidence")
-        for f in findings:
-            if str(f.get("status","open")).lower()=="open" and str(f.get("severity","")).lower() in {"critical","major"}:
-                failures.append(f"{f.get('id')}:open_{f.get('severity')}")
+    def __init__(self, run_dir: Path):
+        self.run_dir = Path(run_dir)
+
+    def evaluate(
+        self,
+        rubric: Any,
+        findings: Any,
+        mandatory_gates: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        rubric_items = normalize_rubric(rubric)
+        finding_items = normalize_findings(findings)
+        records = EvidenceStore(self.run_dir).all()
+        failures: list[str] = []
+
+        # AAH never completes without an explicit acceptance contract.
+        if not rubric_items:
+            failures.append("rubric:missing_or_invalid")
+
+        if any(bool(record.get("_invalid")) for record in records):
+            failures.append("evidence:invalid_jsonl")
+
+        by_ref: dict[str, list[dict[str, Any]]] = {}
+        for record in records:
+            for ref in (record.get("id"), record.get("type")):
+                if ref not in (None, ""):
+                    by_ref.setdefault(str(ref), []).append(record)
+
+        for item in rubric_items:
+            if not item.get("required", True):
+                continue
+            item_id = item.get("id", "unknown")
+            status = str(item.get("status", "UNVERIFIED")).upper()
+            if status != "PASS":
+                failures.append(f"{item_id}:status={status}")
+
+            refs = _evidence_refs(item)
+            if not refs:
+                failures.append(f"{item_id}:missing_evidence")
+                continue
+
+            for ref in refs:
+                matched = by_ref.get(ref, [])
+                if not matched:
+                    failures.append(f"{item_id}:invalid_evidence:{ref}")
+                    continue
+                # An explicit negative result cannot support a PASS criterion.
+                if any(record.get("ok") is False for record in matched):
+                    failures.append(f"{item_id}:failed_evidence:{ref}")
+
+        for finding in finding_items:
+            if str(finding.get("status", "open")).lower() == "open" and str(finding.get("severity", "")).lower() in {"critical", "major"}:
+                failures.append(f"{finding.get('id')}:open_{finding.get('severity')}")
+
         for gate in mandatory_gates or []:
-            if not gate.get("ok",False): failures.append(f"gate:{gate.get('name','unknown')}")
-        return {"done":not failures,"failures":failures,"required":sum(1 for x in rubric if x.get("required",True)),"passed":sum(1 for x in rubric if x.get("required",True) and str(x.get("status","")).upper()=="PASS")}
+            if not gate.get("ok", False):
+                failures.append(f"gate:{gate.get('name', 'unknown')}")
+
+        failures = list(dict.fromkeys(failures))
+        required = sum(1 for item in rubric_items if item.get("required", True))
+        passed = sum(
+            1
+            for item in rubric_items
+            if item.get("required", True) and str(item.get("status", "")).upper() == "PASS"
+        )
+        return {"done": not failures, "failures": failures, "required": required, "passed": passed}
