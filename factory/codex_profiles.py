@@ -23,7 +23,7 @@ BLOCK=f'''{START}
 ":minimal" = "read"
 glob_scan_max_depth = 4
 
-[permissions.aah_readonly.filesystem.":project_roots"]
+[permissions.aah_readonly.filesystem.":workspace_roots"]
 "." = "read"
 {_DENIES}
 
@@ -31,7 +31,7 @@ glob_scan_max_depth = 4
 ":minimal" = "read"
 glob_scan_max_depth = 4
 
-[permissions.aah_workspace.filesystem.":project_roots"]
+[permissions.aah_workspace.filesystem.":workspace_roots"]
 "." = "write"
 ".git/**" = "read"
 ".claude/**" = "read"
@@ -56,17 +56,29 @@ def install_profiles(target: Path | str) -> dict[str, object]:
     original=path.read_text(encoding="utf-8") if path.exists() else ""
     base=_strip_existing(original)
     try:
-        if base.strip(): tomllib.loads(base)
+        if base.strip():
+            tomllib.loads(base)
     except Exception:
         print(f"AAH warning: preserving unparseable {path}; Codex AAH permission profiles were not installed",file=sys.stderr)
         return {"installed":False,"path":str(path),"reason":"unparseable_existing_config"}
     combined=(base+("\n\n" if base else "")+BLOCK+"\n")
+    # Validate the final generated TOML too; never install a profile Codex cannot parse.
+    try:
+        tomllib.loads(combined)
+    except Exception as exc:
+        print(f"AAH warning: generated Codex permission profile is invalid: {type(exc).__name__}",file=sys.stderr)
+        return {"installed":False,"path":str(path),"reason":"generated_profile_invalid"}
     path.write_text(combined,encoding="utf-8")
     return {"installed":True,"path":str(path),"profiles":["aah_readonly","aah_workspace"]}
 
 
 def has_profiles(target: Path | str) -> bool:
     path=Path(target)/".codex"/"config.toml"
-    if not path.exists(): return False
-    try: return START in path.read_text(encoding="utf-8") and END in path.read_text(encoding="utf-8")
-    except OSError: return False
+    if not path.exists():
+        return False
+    try:
+        text=path.read_text(encoding="utf-8")
+        tomllib.loads(text)
+        return START in text and END in text and '":workspace_roots"' in text
+    except (OSError,ValueError,tomllib.TOMLDecodeError):
+        return False
