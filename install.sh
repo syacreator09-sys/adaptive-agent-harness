@@ -33,7 +33,6 @@ RUNTIME="$AAH/runtime"
 BIN="$AAH/bin"
 mkdir -p "$AAH" "$BIN"
 
-# Runtime is copied into the project so the source clone is not required afterward.
 rm -rf "$RUNTIME.new"
 mkdir -p "$RUNTIME.new"
 cp -R "$ROOT/factory" "$RUNTIME.new/factory"
@@ -58,14 +57,12 @@ exec "$PY" -m factory.hook_guardian
 WRAP
 chmod +x "$BIN/guardian-hook"
 
-# Initialize Git only for a project that does not already have it.
 if command -v git >/dev/null 2>&1 && [ "${AAH_NO_GIT_INIT:-0}" != "1" ]; then
   if ! git -C "$TARGET" rev-parse --git-dir >/dev/null 2>&1; then
     git -C "$TARGET" init -q || true
   fi
 fi
 
-# Install Claude Code bridge with unique AAH-prefixed names; existing unrelated agents/skills remain untouched.
 mkdir -p "$TARGET/.claude/skills/aah" "$TARGET/.claude/agents"
 cp "$ROOT/.claude/skills/aah/SKILL.md" "$TARGET/.claude/skills/aah/SKILL.md"
 PYTHONPATH="$RUNTIME" "$PY" - "$TARGET" <<'PY'
@@ -88,7 +85,6 @@ for role in roles:
     (out/f'aah-{role.replace("_","-")}.md').write_text('\n'.join(lines)+'\n',encoding='utf-8')
 PY
 
-# Install an idempotent Claude PreToolUse enforcement hook without replacing existing project hooks.
 "$PY" - "$TARGET" <<'PY'
 from pathlib import Path
 import json, sys
@@ -100,7 +96,7 @@ except Exception:
     raise SystemExit(0)
 hooks=data.setdefault('hooks',{}).setdefault('PreToolUse',[])
 entry={
-  'matcher':'Bash|Read|Write|Edit|NotebookEdit',
+  'matcher':'Bash|Read|Write|Edit|NotebookEdit|Grep|Glob',
   'hooks':[{'type':'command','command':'.aah/bin/guardian-hook','timeout':10,'statusMessage':'AAH Guardian'}]
 }
 def is_aah(x):
@@ -109,7 +105,6 @@ hooks[:]=[x for x in hooks if not is_aah(x)] + [entry]
 p.write_text(json.dumps(data,indent=2)+'\n',encoding='utf-8')
 PY
 
-# Add a small idempotent Codex/agent guidance block without replacing an existing AGENTS.md.
 "$PY" - "$TARGET" <<'PY'
 from pathlib import Path
 import sys
