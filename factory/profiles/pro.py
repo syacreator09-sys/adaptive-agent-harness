@@ -12,10 +12,8 @@ class ProRunner(BaseRunner):
     @staticmethod
     def _evidence_gate(result, name="technical_tests"):
         evidence=result.get("evidence") or []
-        if not evidence:
-            return {"name":name,"ok":False}
         explicit=[record.get("ok") for record in evidence if isinstance(record,dict) and "ok" in record]
-        return {"name":name,"ok":not any(value is False for value in explicit)}
+        return {"name":name,"ok":bool(explicit) and all(value is True for value in explicit)}
 
     def run(self,request:str,guardian="guarded",domain="code",run_id=None,max_passes=None):
         if max_passes is None:
