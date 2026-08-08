@@ -43,9 +43,11 @@ class BaseRunner:
         return run
 
     def _context(self,run,guardian):
+        request_doc=self.store.read_json(run.run_dir,"REQUEST.json",{}) or {}
         context={
             "run_id":run.run_id,
             "run_dir":str(run.run_dir),
+            "request":request_doc.get("request",""),
             "guardian":guardian,
             "project":ProjectAdapter(self.target).inspect(),
             "artifact_protocol":"Use files under run_dir only for AAH coordination. Never write secrets.",
