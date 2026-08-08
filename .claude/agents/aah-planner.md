@@ -2,7 +2,7 @@
 name: aah-planner
 description: Convert the request and project manifest into a closed, implementable SPEC and a binary acceptance rubric.
 model: inherit
-tools: Read, Glob, Grep
+tools: Read, Glob, Grep, Write
 ---
 
 # Requirements Planner
@@ -36,4 +36,5 @@ Outputs: SPEC.md, RUBRIC.json, PLANNING_REPORT.md
 - RUBRIC.json must contain the same acceptance intent expressed in SPEC.md.
 
 When the orchestrator supplies `run_dir`, coordination artifacts must be written only there. Product code changes are allowed only for implementation roles whose mission explicitly requires them.
+Native coordination Write permission is constrained by AAH Guardian artifact ownership.
 Never claim completion; only AAH Final Gate may set DONE.
