@@ -16,6 +16,7 @@ from ..gitops import GitCheckpoints
 _RUNTIME_OWNED = {
     "STATE.json", "REQUEST.json", "EVENTS.jsonl", "AGENTS.jsonl", "EVIDENCE.jsonl",
     "CONTRACT.json", "RUBRIC_BASELINE.json", "FINAL_REPORT.json", "FINAL_REPORT.md",
+    "PARENT_RUN.json", "ESCALATION_CONTEXT.json", "TASK_OUTPUTS.json",
 }
 _ROLE_WRITERS: dict[str, set[str]] = {
     "SPEC.md": {"planner", "content_strategist"},
@@ -51,32 +52,33 @@ class BaseRunner:
         self.store = ArtifactStore(self.target)
 
     def _new(self, request, guardian, domain="code", run_id=None):
-        if run_id:
-            return self.store.get_run(run_id)
-        run = self.store.create_run(request, self.profile, guardian, domain)
-        snapshot = GitCheckpoints(self.target).snapshot()
-        state = self._state(run).load()
-        state["git_base"] = snapshot.get("head")
-        state["git_base_dirty"] = snapshot.get("dirty", False)
-        state["git_worktree"] = snapshot.get("is_linked_worktree", False)
-        self._state(run).save(state)
-        request_doc = self.store.read_json(run.run_dir, "REQUEST.json", {})
-        request_doc["git_base"] = snapshot.get("head")
-        self.store.write_json(run.run_dir, "REQUEST.json", request_doc)
-        EventJournal(run.run_dir).append(
-            "RUN_CREATED",
-            run_id=run.run_id,
-            profile=self.profile,
-            guardian=guardian,
-            domain=domain,
-            git_base=snapshot.get("head"),
-            dirty_baseline=snapshot.get("dirty", False),
-        )
+        created = run_id is None
+        run = self.store.create_run(request, self.profile, guardian, domain) if created else self.store.get_run(run_id)
+        state_store = self._state(run)
+        state = state_store.load()
+        if "git_base" not in state:
+            snapshot = GitCheckpoints(self.target).snapshot()
+            state["git_base"] = snapshot.get("head")
+            state["git_base_dirty"] = snapshot.get("dirty", False)
+            state["git_worktree"] = snapshot.get("is_linked_worktree", False)
+            state_store.save(state)
+            request_doc = self.store.read_json(run.run_dir, "REQUEST.json", {}) or {}
+            request_doc["git_base"] = snapshot.get("head")
+            self.store.write_json(run.run_dir, "REQUEST.json", request_doc)
+            EventJournal(run.run_dir).append(
+                "RUN_CREATED" if created else "RUN_ATTACHED",
+                run_id=run.run_id,
+                profile=self.profile,
+                guardian=guardian,
+                domain=domain,
+                git_base=snapshot.get("head"),
+                dirty_baseline=snapshot.get("dirty", False),
+            )
         return run
 
     def _context(self, run, guardian):
         request_doc = self.store.read_json(run.run_dir, "REQUEST.json", {}) or {}
-        return {
+        context = {
             "run_id": run.run_id,
             "run_dir": str(run.run_dir),
             "request": request_doc.get("request", ""),
@@ -88,20 +90,25 @@ class BaseRunner:
                 "RUBRIC_BASELINE.json after planning. Never use another agent's conclusion as proof."
             ),
         }
+        escalation = self.store.read_json(run.run_dir, "ESCALATION_CONTEXT.json", None)
+        if escalation:
+            context["escalation_context"] = escalation
+        return context
 
     def _record_policy_violation(self, run, role: str, name: str) -> None:
         finding_id = f"F-POLICY-{role}-{name}".replace("/", "-").replace(".", "-")
         findings = self._findings(run)
-        if not any(str(item.get("id")) == finding_id and str(item.get("status", "open")).lower() == "open" for item in findings):
-            findings.append(
-                {
-                    "id": finding_id,
-                    "severity": "major",
-                    "status": "open",
-                    "rubric_id": None,
-                    "detail": f"Role {role} attempted to overwrite protected artifact {name}",
-                }
-            )
+        if not any(
+            str(item.get("id")) == finding_id and str(item.get("status", "open")).lower() == "open"
+            for item in findings
+        ):
+            findings.append({
+                "id": finding_id,
+                "severity": "major",
+                "status": "open",
+                "rubric_id": None,
+                "detail": f"Role {role} attempted to overwrite protected artifact {name}",
+            })
             self.store.write_json(run.run_dir, "FINDINGS.json", findings)
         EvidenceStore(run.run_dir).append(
             {"type": "artifact_policy_violation", "ok": False, "role": role, "artifact": name}
@@ -110,8 +117,8 @@ class BaseRunner:
 
     def _ingest(self, run, result):
         role = str(result.get("_aah_role") or "unknown")
-        for name, value in (result.get("artifacts") or {}).items():
-            name = str(name)
+        for raw_name, value in (result.get("artifacts") or {}).items():
+            name = str(raw_name)
             if name in _RUNTIME_OWNED:
                 self._record_policy_violation(run, role, name)
                 continue
@@ -131,6 +138,7 @@ class BaseRunner:
 
     def _record_agent(self, run, role: str, task: dict[str, Any], result: dict[str, Any], attempt: int) -> None:
         assignment = result.get("_aah_assignment") or {}
+        nested_task = task.get("task") if isinstance(task.get("task"), dict) else {}
         record = {
             "role": role,
             "session": result.get("_aah_session") or result.get("session"),
@@ -138,9 +146,10 @@ class BaseRunner:
             "model": assignment.get("model") or result.get("provider_raw_model"),
             "capability": assignment.get("capability"),
             "effort": assignment.get("effort"),
+            "mcp": list(assignment.get("mcp") or []),
             "mode": task.get("mode"),
             "pass": task.get("pass") or task.get("attempt"),
-            "task_id": task.get("id") or (task.get("task") or {}).get("id") if isinstance(task.get("task"), dict) else task.get("id"),
+            "task_id": task.get("id") or nested_task.get("id"),
             "dispatch_attempt": attempt,
         }
         self.store.append_jsonl(run.run_dir, "AGENTS.jsonl", redact_data(record))
@@ -156,6 +165,7 @@ class BaseRunner:
             f"Provider: `{record['provider']}`",
             f"Model: `{record['model']}`",
             f"Capability: `{record['capability']}`",
+            f"MCP: `{', '.join(record['mcp']) if record['mcp'] else 'none'}`",
             f"Mode: `{record['mode']}`",
             "",
             "## Summary",
@@ -168,7 +178,13 @@ class BaseRunner:
         journal = EventJournal(run.run_dir)
         last_error: Exception | None = None
         for attempt in (1, 2):
-            journal.append("AGENT_STARTED", role=role, mode=task.get("mode"), attempt=attempt, task_id=task.get("id"))
+            journal.append(
+                "AGENT_STARTED",
+                role=role,
+                mode=task.get("mode"),
+                attempt=attempt,
+                task_id=task.get("id") or (task.get("task") or {}).get("id") if isinstance(task.get("task"), dict) else task.get("id"),
+            )
             try:
                 result = self.executor.execute(role, task, context)
                 result.setdefault("_aah_role", role)
@@ -197,8 +213,12 @@ class BaseRunner:
 
     def _seal(self, run) -> dict[str, Any]:
         contract = seal_contract(run.run_dir)
-        checkpoint = GitCheckpoints(self.target).planning_checkpoint(run.run_id)
-        self.store.write_json(run.run_dir, "checkpoints/planning.json", checkpoint)
+        checkpoint_path = run.run_dir / "checkpoints" / "planning.json"
+        if checkpoint_path.exists():
+            checkpoint = self.store.read_json(run.run_dir, "checkpoints/planning.json", {}) or {}
+        else:
+            checkpoint = GitCheckpoints(self.target).planning_checkpoint(run.run_id)
+            self.store.write_json(run.run_dir, "checkpoints/planning.json", checkpoint)
         state = self._state(run).load()
         state["contract"] = contract
         state["planning_checkpoint"] = checkpoint
@@ -211,6 +231,23 @@ class BaseRunner:
             git_checkpoint=checkpoint.get("head"),
         )
         return contract
+
+    def _ensure_contract(self, run, state, context, request: str, domain: str, profile: str) -> None:
+        if (run.run_dir / "CONTRACT.json").exists():
+            # seal_contract is idempotent and verifies immutable hashes.
+            seal_contract(run.run_dir)
+            return
+        have_spec = (run.run_dir / "SPEC.md").exists()
+        have_rubric = (run.run_dir / "RUBRIC.json").exists()
+        if not (have_spec and have_rubric):
+            state.transition(Phase.PLANNING)
+            self._dispatch(
+                run,
+                role_for(domain, "planner"),
+                {"request": request, "mode": "plan", "profile": profile},
+                context,
+            )
+        self._seal(run)
 
     def _rubric(self, run) -> list[dict[str, Any]]:
         baseline = baseline_criteria(run.run_dir)
@@ -226,12 +263,15 @@ class BaseRunner:
 
     def _pending_findings(self, run) -> list[dict[str, Any]]:
         git = GitCheckpoints(self.target)
+        state = self._state(run).load()
+        planning = state.get("planning_checkpoint") or {}
+        since = planning.get("head") or state.get("git_base")
         pending: list[dict[str, Any]] = []
         for finding in self._findings(run):
             if str(finding.get("status", "open")).lower() != "open":
                 continue
             finding_id = str(finding.get("id") or "")
-            if finding_id and git.has_finding_commit(finding_id):
+            if finding_id and git.has_finding_commit(finding_id, since=since):
                 EventJournal(run.run_dir).append("FINDING_ALREADY_COMMITTED", finding_id=finding_id)
                 continue
             pending.append(finding)
@@ -245,22 +285,23 @@ class BaseRunner:
         return RunStateStore(run.run_dir)
 
     def _abort(self, run, state, error: Exception, phase: str) -> dict[str, Any]:
-        finding_id = f"F-RUNTIME-{phase.upper()}"
+        finding_id = f"F-RUNTIME-{str(phase).upper()}"
         findings = self._findings(run)
-        findings.append(
-            {
+        if not any(str(item.get("id")) == finding_id and str(item.get("status", "open")).lower() == "open" for item in findings):
+            findings.append({
                 "id": finding_id,
                 "severity": "critical",
                 "status": "open",
                 "rubric_id": None,
                 "detail": f"Runtime stopped after bounded retry: {type(error).__name__}: {str(error)[:800]}",
-            }
-        )
-        self.store.write_json(run.run_dir, "FINDINGS.json", findings)
+            })
+            self.store.write_json(run.run_dir, "FINDINGS.json", findings)
         EvidenceStore(run.run_dir).append(
             {"id": f"E-{finding_id}", "type": "runtime_failure", "ok": False, "detail": str(error)[:800]}
         )
-        EventJournal(run.run_dir).append("RUN_ABORTED", phase=phase, error=type(error).__name__, detail=str(error)[:1000])
+        EventJournal(run.run_dir).append(
+            "RUN_ABORTED", phase=phase, error=type(error).__name__, detail=str(error)[:1000]
+        )
         state.transition(Phase.FAILED, status="failed", failure_phase=phase)
         gate = self._gate(run, [{"name": "runtime", "ok": False}])
         return self._write_report(run, gate, {"runtime_error": str(error), "failure_phase": phase})
@@ -310,10 +351,18 @@ class BaseRunner:
         for agent in agents:
             lines.append(
                 f"- {agent.get('role')} — session `{agent.get('session')}` — "
-                f"{agent.get('provider')}/{agent.get('model')} — mode `{agent.get('mode')}`"
+                f"{agent.get('provider')}/{agent.get('model')} — mode `{agent.get('mode')}` — "
+                f"MCP `{', '.join(agent.get('mcp') or []) or 'none'}`"
             )
         if gate["failures"]:
             lines += ["", "## Blocking items"] + [f"- {item}" for item in gate["failures"]]
         self.store.write_text(run.run_dir, "FINAL_REPORT.md", "\n".join(lines))
-        EventJournal(run.run_dir).append("FINAL_REPORT_WRITTEN", done=gate["done"], failures=len(gate["failures"]))
+        EventJournal(run.run_dir).append(
+            "FINAL_REPORT_WRITTEN", done=gate["done"], failures=len(gate["failures"])
+        )
         return report
+
+
+# Local import avoids a cycle at module import time while keeping _ensure_contract
+# shared by all profiles.
+from ..domains import role_for
