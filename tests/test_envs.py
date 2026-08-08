@@ -31,14 +31,17 @@ class EnvRouterTests(unittest.TestCase):
         self.assertNotIn("DATABASE_URL", denied)
         self.assertEqual(allowed["DATABASE_URL"], "postgres://secret")
 
-    def test_unknown_requested_secret_name_is_not_added(self):
+    def test_unknown_ambient_secret_is_removed_even_if_task_requests_it(self):
         project = {"env_names": [], "env_classes": {}}
         source = {"DATABASE_URL": "ambient-secret", "PATH": "/bin"}
         env = EnvRouter().scoped_provider_env(project, "builder", {"required_env": ["DATABASE_URL"]}, source)
-        # Project Adapter did not discover this as a project env, so AAH does not
-        # claim permission to grant it. Ambient process variables outside the
-        # project manifest are not managed here; subscription API keys are still stripped.
-        self.assertEqual(env["DATABASE_URL"], "ambient-secret")
+        self.assertNotIn("DATABASE_URL", env)
+
+    def test_safe_ambient_auth_socket_is_preserved(self):
+        project = {"env_names": [], "env_classes": {}}
+        source = {"SSH_AUTH_SOCK": "/tmp/agent.sock", "PATH": "/bin"}
+        env = EnvRouter().scoped_provider_env(project, "evaluator", {}, source)
+        self.assertEqual(env["SSH_AUTH_SOCK"], "/tmp/agent.sock")
 
 
 if __name__ == "__main__":
