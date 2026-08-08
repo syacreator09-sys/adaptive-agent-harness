@@ -7,6 +7,7 @@ from .agents import AgentRegistry
 from .providers import ProviderRegistry, ProviderError, is_model_selection_error
 from .tools import ToolRouter
 from .envs import EnvRouter
+from .mcp import MCPDiscovery
 
 
 OUTPUT_CONTRACT = (
@@ -26,11 +27,12 @@ class AgentExecutor:
         registry: AgentRegistry | None = None,
         tool_router: ToolRouter | None = None,
     ):
-        self.target = Path(target)
+        self.target = Path(target).resolve()
         self.assignments = assignments
         self.subscription_only = subscription_only
         self.registry = registry or AgentRegistry()
         self.tool_router = tool_router or ToolRouter()
+        self.mcp = MCPDiscovery(self.target)
         self.calls: list[dict[str, Any]] = []
 
     def execute(
@@ -40,6 +42,8 @@ class AgentExecutor:
         context: dict[str, Any],
         session: str | None = None,
     ) -> dict[str, Any]:
+        # A fresh UUID plus a fresh provider subprocess is created for every
+        # dispatch. AAH never reuses evaluator context across passes.
         session = session or str(uuid.uuid4())
         agent = self.registry.get(role)
         assignment = dict(self.assignments.get(role, {}))
@@ -54,13 +58,25 @@ class AgentExecutor:
             provider=provider_name,
             context=context,
         )
-        required = set(task.get("required_tools") or [])
-        missing_required = required.intersection(resolution["missing"])
-        if missing_required:
-            raise RuntimeError(f"Missing required tools for {role}: {sorted(missing_required)}")
+        required_tools = set(task.get("required_tools") or [])
+        missing_required_tools = required_tools.intersection(resolution["missing"])
+        if missing_required_tools:
+            raise RuntimeError(f"Missing required tools for {role}: {sorted(missing_required_tools)}")
+
+        mcp_resolution = self.mcp.resolve(
+            provider_name,
+            required=task.get("required_mcp") or [],
+            optional=task.get("optional_mcp") or [],
+        )
+        if mcp_resolution["missing_required"]:
+            raise RuntimeError(
+                f"Missing required MCP servers for {role}/{provider_name}: "
+                f"{mcp_resolution['missing_required']}"
+            )
 
         enriched = dict(context)
         enriched["tool_resolution"] = resolution
+        enriched["mcp_resolution"] = mcp_resolution
         enriched["agent_session"] = session
         enriched["agent_role"] = role
         provider = ProviderRegistry.build(provider_name, self.subscription_only)
@@ -79,6 +95,7 @@ class AgentExecutor:
         candidates: list[str | None] = list(dict.fromkeys(configured))
         if assignment.get("model") and assignment["model"] not in candidates:
             candidates.insert(0, assignment["model"])
+        # The user's current CLI default is the final compatibility fallback.
         candidates.append(None)
 
         last_error: Exception | None = None
@@ -94,12 +111,16 @@ class AgentExecutor:
                     guardian=context.get("guardian", "guarded"),
                     access=access,
                     env=env,
+                    effort=assignment.get("effort"),
+                    mcp=mcp_resolution,
                 )
                 model_used = model
                 break
             except ProviderError as exc:
                 last_error = exc
                 has_next = index < len(candidates) - 1
+                # Only model-selection/access failures are safe to replay with a
+                # different model. Runtime/tool failures are never duplicated.
                 if not has_next or not is_model_selection_error(exc):
                     raise
 
@@ -115,6 +136,10 @@ class AgentExecutor:
             "effort": assignment.get("effort"),
             "task": task,
             "tools": resolution,
+            "mcp": {
+                "selected": mcp_resolution.get("selected", []),
+                "missing_optional": mcp_resolution.get("missing_optional", []),
+            },
         }
         self.calls.append(call)
         result.setdefault("session", session)
@@ -125,6 +150,7 @@ class AgentExecutor:
             "model": model_used,
             "capability": assignment.get("capability"),
             "effort": assignment.get("effort"),
+            "mcp": list(mcp_resolution.get("selected", [])),
         }
         return result
 
@@ -155,7 +181,7 @@ class AgentExecutor:
             f"Outputs: {agent['outputs']}\n"
             f"Rules:\n- {rules}\n\n"
             "This is a fresh independent invocation. Trust persistent artifacts and executable evidence, "
-            "not conclusions from another agent.\n\n"
+            "not conclusions from another agent. Use only MCP servers listed under mcp_resolution.selected.\n\n"
             f"Task:\n{json.dumps(task, indent=2, default=str)}\n\n"
             f"Context:\n{json.dumps(minimal, indent=2, default=str)}\n\n"
             f"{OUTPUT_CONTRACT}"
@@ -177,5 +203,8 @@ class ScriptedExecutor:
         result.setdefault("session", session)
         result["_aah_role"] = role
         result["_aah_session"] = session
-        result.setdefault("_aah_assignment", {"provider": "scripted", "model": None, "capability": None, "effort": None})
+        result.setdefault(
+            "_aah_assignment",
+            {"provider": "scripted", "model": None, "capability": None, "effort": None, "mcp": []},
+        )
         return result
