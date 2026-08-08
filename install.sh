@@ -2,11 +2,14 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-TARGET="${1:-$PWD}"
-TARGET="$(cd "$TARGET" 2>/dev/null && pwd -P || true)"
+TARGET_RAW="${1:-$PWD}"
+if [ ! -e "$TARGET_RAW" ]; then
+  mkdir -p "$TARGET_RAW"
+fi
+TARGET="$(cd "$TARGET_RAW" 2>/dev/null && pwd -P || true)"
 
 if [ -z "$TARGET" ] || [ ! -d "$TARGET" ]; then
-  echo "AAH: target directory does not exist" >&2
+  echo "AAH: target path is not a directory" >&2
   exit 2
 fi
 
@@ -55,7 +58,7 @@ exec "$PY" -m factory.hook_guardian
 WRAP
 chmod +x "$BIN/guardian-hook"
 
-# Initialize Git only for a project that does not already have it, mirroring LITE's checkpoint philosophy.
+# Initialize Git only for a project that does not already have it.
 if command -v git >/dev/null 2>&1 && [ "${AAH_NO_GIT_INIT:-0}" != "1" ]; then
   if ! git -C "$TARGET" rev-parse --git-dir >/dev/null 2>&1; then
     git -C "$TARGET" init -q || true
@@ -93,7 +96,6 @@ root=Path(sys.argv[1]); p=root/'.claude'/'settings.local.json'; p.parent.mkdir(p
 try:
     data=json.loads(p.read_text(encoding='utf-8')) if p.exists() else {}
 except Exception:
-    # Never destroy an unparseable user settings file. External AAH still works; native Guardian hook is skipped.
     print(f"AAH warning: preserving unparseable {p}; Guardian hook was not installed there", file=sys.stderr)
     raise SystemExit(0)
 hooks=data.setdefault('hooks',{}).setdefault('PreToolUse',[])
