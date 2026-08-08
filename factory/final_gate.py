@@ -1,7 +1,7 @@
 from __future__ import annotations
 from pathlib import Path
 from typing import Any
-from .contracts import baseline_criteria, status_map, verify_contract
+from .contracts import baseline_criteria, validated_status_map, verify_contract
 from .evidence import EvidenceStore
 
 
@@ -13,24 +13,13 @@ def normalize_findings(value: Any) -> list[dict[str, Any]]:
     return [item for item in value if isinstance(item, dict)]
 
 
-def _refs(item: dict[str, Any]) -> list[str]:
-    value = item.get("evidence")
-    if value in (None, "", []):
-        value = item.get("evidence_ref")
-    if value in (None, "", []):
-        return []
-    if isinstance(value, str):
-        return [value]
-    if isinstance(value, (list, tuple, set)):
-        return [str(x) for x in value if x not in (None, "")]
-    return [str(value)]
-
-
 class FinalGate:
     """Fail-closed deterministic completion gate.
 
-    V2 requires a sealed SPEC/RUBRIC contract. Agent prose can never substitute
-    for a contract, criterion status, or explicit positive evidence.
+    Required acceptance criteria are read only from the sealed runtime contract.
+    Evaluator status must be a valid snapshot of that contract. Criterion proof
+    references stable evidence IDs only; semantic evidence types are reserved for
+    mandatory technical/system/security gates.
     """
 
     def __init__(self, run_dir: Path):
@@ -42,10 +31,9 @@ class FinalGate:
         findings: Any = None,
         mandatory_gates: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        del rubric  # Acceptance is always read from the sealed runtime contract.
+        del rubric
         failures: list[str] = []
-        sealed = (self.run_dir / "CONTRACT.json").exists()
-        if not sealed:
+        if not (self.run_dir / "CONTRACT.json").exists():
             return {
                 "done": False,
                 "failures": ["contract:missing"],
@@ -58,7 +46,8 @@ class FinalGate:
         if not contract_ok:
             failures.extend(contract_failures)
         criteria = baseline_criteria(self.run_dir)
-        statuses = status_map(self.run_dir)
+        statuses, status_failures = validated_status_map(self.run_dir, criteria)
+        failures.extend(status_failures)
 
         required = [item for item in criteria if item.get("required", True)]
         if not criteria:
@@ -70,11 +59,14 @@ class FinalGate:
         if any(record.get("_invalid") for record in records):
             failures.append("evidence:invalid_jsonl")
 
-        by_ref: dict[str, list[dict[str, Any]]] = {}
+        by_id: dict[str, list[dict[str, Any]]] = {}
         for record in records:
-            for ref in (record.get("id"), record.get("type")):
-                if ref not in (None, ""):
-                    by_ref.setdefault(str(ref), []).append(record)
+            evidence_id = record.get("id")
+            if evidence_id not in (None, ""):
+                by_id.setdefault(str(evidence_id), []).append(record)
+        for evidence_id, matches in by_id.items():
+            if len(matches) > 1:
+                failures.append(f"evidence:duplicate_id:{evidence_id}")
 
         passed = 0
         for baseline in required:
@@ -85,22 +77,27 @@ class FinalGate:
             if not criterion_ok:
                 failures.append(f"{criterion_id}:status={status}")
 
-            refs = _refs(status_row)
+            refs = status_row.get("evidence") or []
             if not refs:
                 failures.append(f"{criterion_id}:missing_evidence")
                 criterion_ok = False
             else:
                 for ref in refs:
-                    matched = by_ref.get(ref, [])
+                    matched = by_id.get(str(ref), [])
                     if not matched:
                         failures.append(f"{criterion_id}:invalid_evidence:{ref}")
                         criterion_ok = False
                         continue
-                    if any(record.get("ok") is False for record in matched):
+                    if len(matched) != 1:
+                        failures.append(f"{criterion_id}:ambiguous_evidence:{ref}")
+                        criterion_ok = False
+                        continue
+                    record = matched[0]
+                    if record.get("ok") is False:
                         failures.append(f"{criterion_id}:failed_evidence:{ref}")
                         criterion_ok = False
                         continue
-                    if not any(record.get("ok") is True for record in matched):
+                    if record.get("ok") is not True:
                         failures.append(f"{criterion_id}:unverified_evidence:{ref}")
                         criterion_ok = False
             if criterion_ok:
