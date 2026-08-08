@@ -30,14 +30,9 @@ class Guardian:
         re.compile(r"\b(shutdown|reboot|halt|poweroff)\b"),
     ]
     PROD_PATTERNS = [re.compile(pattern, re.I) for pattern in [
-        r"kubectl\s+(apply|delete|replace|patch)",
-        r"terraform\s+(apply|destroy)",
-        r"\bDROP\s+DATABASE\b",
-        r"\bDROP\s+TABLE\b",
-        r"\bTRUNCATE\s+TABLE\b",
-        r"\bproduction\b",
-        r"\bprod\b",
-        r"git\s+push\b",
+        r"kubectl\s+(apply|delete|replace|patch)", r"terraform\s+(apply|destroy)",
+        r"\bDROP\s+DATABASE\b", r"\bDROP\s+TABLE\b", r"\bTRUNCATE\s+TABLE\b",
+        r"\bproduction\b", r"\bprod\b", r"git\s+push\b",
     ]]
     PROTECTED_WRITE_PREFIXES = (".git/", ".claude/", ".codex/", ".aah/runtime/", ".aah/bin/")
     PROTECTED_READ_PREFIXES = (".git/", ".aah/runtime/", ".aah/bin/")
@@ -47,41 +42,54 @@ class Guardian:
         "planner", "architect", "tester", "evaluator", "task_evaluator", "system_tester",
         "security_reviewer", "final_reviewer", "content_strategist", "content_evaluator", "fact_checker",
     }
+    EVIDENCE_WRITER_ROLES = {
+        "tester", "evaluator", "task_evaluator", "system_tester",
+        "security_reviewer", "content_evaluator", "fact_checker",
+    }
     ROLE_RUN_WRITES: dict[str, set[str]] = {
         "planner": {"SPEC.md", "RUBRIC.json", "PLANNING_REPORT.md"},
         "content_strategist": {"SPEC.md", "RUBRIC.json", "PLANNING_REPORT.md"},
         "architect": {"ARCHITECTURE.md", "TASKS.json", "ARCHITECTURE_REPORT.md"},
-        "tester": {"TEST_REPORT.md"},
-        "evaluator": {"RUBRIC_STATUS.json", "FINDINGS.json", "FINDINGS.md", "EVALUATION_REPORT.md"},
-        "content_evaluator": {"RUBRIC_STATUS.json", "FINDINGS.json", "FINDINGS.md", "EVALUATION_REPORT.md", "SYSTEM_TEST_REPORT.md"},
-        "fact_checker": {"RUBRIC_STATUS.json", "FINDINGS.json", "FINDINGS.md", "EVALUATION_REPORT.md", "SYSTEM_TEST_REPORT.md"},
-        "system_tester": {"SYSTEM_TEST_REPORT.md"},
-        "security_reviewer": {"SECURITY_REPORT.md"},
+        "builder": {"BUILD_REPORT.md", "FIX_REPORT.md"},
+        "fixer": {"FIX_REPORT.md"},
+        "worker": {"BUILD_REPORT.md", "FIX_REPORT.md", "TASK_BUILD_REPORT.md", "TASK_FIX_REPORT.md"},
+        "integrator": {"INTEGRATION_REPORT.md"},
+        "content_producer": {"BUILD_REPORT.md", "FIX_REPORT.md"},
+        "researcher": {"BUILD_REPORT.md", "FIX_REPORT.md"},
+        "tester": {"TEST_REPORT.md", "EVIDENCE_DRAFT.json"},
+        "evaluator": {"RUBRIC_STATUS.json", "FINDINGS.json", "FINDINGS.md", "EVALUATION_REPORT.md", "EVIDENCE_DRAFT.json"},
+        "content_evaluator": {"RUBRIC_STATUS.json", "FINDINGS.json", "FINDINGS.md", "EVALUATION_REPORT.md", "SYSTEM_TEST_REPORT.md", "EVIDENCE_DRAFT.json"},
+        "fact_checker": {"RUBRIC_STATUS.json", "FINDINGS.json", "FINDINGS.md", "EVALUATION_REPORT.md", "SYSTEM_TEST_REPORT.md", "EVIDENCE_DRAFT.json"},
+        "system_tester": {"SYSTEM_TEST_REPORT.md", "EVIDENCE_DRAFT.json"},
+        "security_reviewer": {"SECURITY_REPORT.md", "EVIDENCE_DRAFT.json"},
         "final_reviewer": {"REVIEW_REPORT.md"},
-        "task_evaluator": {"RUBRIC_STATUS.json", "FINDINGS.json", "FINDINGS.md", "EVALUATION_REPORT.md", "TASK_RUBRIC_STATUS.json", "TASK_FINDINGS.json", "TASK_FINDINGS.md", "TASK_EVALUATION_REPORT.md"},
+        "task_evaluator": {
+            "RUBRIC_STATUS.json", "FINDINGS.json", "FINDINGS.md", "EVALUATION_REPORT.md",
+            "TASK_RUBRIC_STATUS.json", "TASK_FINDINGS.json", "TASK_FINDINGS.md", "TASK_EVALUATION_REPORT.md",
+            "EVIDENCE_DRAFT.json",
+        },
     }
     RUNTIME_OWNED_BASENAMES = {
         "STATE.json", "REQUEST.json", "EVENTS.jsonl", "AGENTS.jsonl", "EVIDENCE.jsonl",
         "CONTRACT.json", "RUBRIC_BASELINE.json", "FINAL_REPORT.json", "FINAL_REPORT.md",
+        "PARENT_RUN.json", "ESCALATION_CONTEXT.json", "TASK_OUTPUTS.json",
     }
 
     REVIEW_SAFE_COMMANDS = [re.compile(pattern, re.I) for pattern in [
-        r"^pwd$",
-        r"^ls(?:\s|$)",
-        r"^git\s+(status|diff|log|show|rev-parse)(?:\s|$)",
+        r"^pwd$", r"^ls(?:\s|$)", r"^git\s+(status|diff|log|show|rev-parse)(?:\s|$)",
         r"^(rg|grep|head|tail|wc)\s",
-        r"^(python|python3)\s+-m\s+(pytest|unittest)(?:\s|$)",
-        r"^pytest(?:\s|$)",
+        r"^(python|python3)\s+-m\s+(pytest|unittest)(?:\s|$)", r"^pytest(?:\s|$)",
         r"^npm\s+(test|run\s+(test|lint|build|typecheck|check|dev|start))(?:\s|$)",
         r"^pnpm\s+(test|run\s+(test|lint|build|typecheck|check|dev|start))(?:\s|$)",
         r"^yarn\s+(test|run\s+(test|lint|build|typecheck|check|dev|start))(?:\s|$)",
         r"^bun\s+(test|run\s+(test|lint|build|typecheck|check|dev|start))(?:\s|$)",
-        r"^cargo\s+(test|check|build)(?:\s|$)",
-        r"^go\s+test(?:\s|$)",
-        r"^(npx\s+)?playwright\s+test(?:\s|$)",
-        r"^ffprobe\s+[^;&|`<>]+$",
+        r"^cargo\s+(test|check|build)(?:\s|$)", r"^go\s+test(?:\s|$)",
+        r"^(npx\s+)?playwright\s+test(?:\s|$)", r"^ffprobe\s+[^;&|`<>]+$",
         r"^curl\s+[^;&|`]*https?://(127\.0\.0\.1|localhost)(:\d+)?(?:/[^\s]*)?(?:\s|$)",
     ]]
+    EVIDENCE_INGEST = re.compile(
+        r"^\.aah/bin/factory\s+evidence-ingest\s+RUN-[A-Za-z0-9._-]+\s+--file\s+[A-Za-z0-9_./-]+$"
+    )
 
     def __init__(self, mode: str = "guarded"):
         self.mode = mode if mode in {"open", "guarded", "locked"} else "guarded"
@@ -102,6 +110,10 @@ class Guardian:
         compact = command.strip()
         if self._sensitive_command_text(compact):
             return CommandDecision(Decision.BLOCK, f"{role} cannot access sensitive paths from shell")
+        if self.EVIDENCE_INGEST.fullmatch(compact):
+            if role in self.EVIDENCE_WRITER_ROLES:
+                return CommandDecision(Decision.ALLOW, "runtime-controlled evidence ingestion")
+            return CommandDecision(Decision.BLOCK, f"{role} cannot submit verification evidence")
         if any(token in compact for token in [";", "&&", "||", "`", "$(", ">", "<"]):
             return CommandDecision(Decision.BLOCK, f"{role} shell command is outside the verification allowlist")
         if any(pattern.search(compact) for pattern in self.REVIEW_SAFE_COMMANDS):
@@ -113,6 +125,11 @@ class Guardian:
             if pattern.search(command):
                 return CommandDecision(Decision.BLOCK, "universal destructive action")
         normalized = self.normalize_role(role)
+        compact = command.strip()
+        if self.EVIDENCE_INGEST.fullmatch(compact):
+            if normalized in self.EVIDENCE_WRITER_ROLES:
+                return CommandDecision(Decision.ALLOW, "runtime-controlled evidence ingestion")
+            return CommandDecision(Decision.BLOCK, "only verification roles may ingest evidence")
         if normalized in self.ARTIFACT_ONLY_ROLES:
             return self._artifact_role_command(command, normalized)
         if re.search(r"\b(curl|wget)\b[^|]*\|\s*(bash|sh)\b", command):
@@ -174,12 +191,18 @@ class Guardian:
         if relative.startswith(".aah/") and not relative.startswith(".aah/runs/"):
             return False
 
-        if normalized in self.ARTIFACT_ONLY_ROLES:
-            if not relative.startswith(".aah/runs/"):
-                return False
+        if relative.startswith(".aah/runs/"):
             basename = Path(relative).name
             if basename in self.RUNTIME_OWNED_BASENAMES:
                 return False
-            allowed = self.ROLE_RUN_WRITES.get(normalized, set())
-            return basename in allowed
+            all_owned = set().union(*self.ROLE_RUN_WRITES.values()) if self.ROLE_RUN_WRITES else set()
+            allowed = self.ROLE_RUN_WRITES.get(normalized or "", set())
+            if basename in all_owned:
+                return basename in allowed
+            # Coordination directories are not scratch space. Unknown files must
+            # go under product workspace or be added explicitly to the contract.
+            return False
+
+        if normalized in self.ARTIFACT_ONLY_ROLES:
+            return False
         return True
