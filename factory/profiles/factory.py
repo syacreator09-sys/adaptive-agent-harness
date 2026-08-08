@@ -11,10 +11,8 @@ class FactoryRunner(BaseRunner):
     @staticmethod
     def _evidence_ok(result) -> bool:
         evidence=result.get("evidence") or []
-        if not evidence:
-            return False
         explicit=[record.get("ok") for record in evidence if isinstance(record,dict) and "ok" in record]
-        return not any(value is False for value in explicit)
+        return bool(explicit) and all(value is True for value in explicit)
 
     def _task_pipeline(self, run, task, ctx, domain):
         task_id=str(task["id"])
@@ -45,14 +43,25 @@ class FactoryRunner(BaseRunner):
                 ctx,
             )
             self._ingest(run,evaluated)
+            verification_ok=self._evidence_ok(evaluated)
             result=evaluated.get("task_result") or {
                 "status":"UNVERIFIED",
                 "findings":["task evaluator returned no task_result"],
             }
-            result={**result,"task_id":task_id,"attempt":attempt,"profile":hinted,"technical_ok":technical_ok}
+            result={
+                **result,
+                "task_id":task_id,
+                "attempt":attempt,
+                "profile":hinted,
+                "technical_ok":technical_ok,
+                "verification_evidence_ok":verification_ok,
+            }
+            if str(result.get("status","")).upper()=="PASS" and not verification_ok:
+                result["status"]="UNVERIFIED"
+                result.setdefault("findings",[]).append("task evaluator supplied no explicit positive evidence")
             if hinted=="pro" and not technical_ok and str(result.get("status","")).upper()=="PASS":
                 result["status"]="FAIL"
-                result.setdefault("findings",[]).append("technical tester produced no passing evidence")
+                result.setdefault("findings",[]).append("technical tester supplied no explicit positive evidence")
             task_history.append(result)
             if str(result.get("status","")).upper()=="PASS":
                 return {"ok":True,"history":task_history,"summary":worker.get("summary","")}
@@ -126,10 +135,8 @@ class FactoryRunner(BaseRunner):
         ]
         if domain in {"code","operations"}:
             sec_evidence=[e for e in (sec.get("evidence") or []) if isinstance(e,dict) and (e.get("kind")=="security" or e.get("type")=="security")]
-            mandatory.append({
-                "name":"security",
-                "ok":bool(sec_evidence) and not any(e.get("ok") is False for e in sec_evidence),
-            })
+            explicit=[e.get("ok") for e in sec_evidence if "ok" in e]
+            mandatory.append({"name":"security","ok":bool(explicit) and all(value is True for value in explicit)})
 
         gate=self._gate(run,mandatory)
         state.transition(Phase.DONE if gate["done"] else Phase.PAUSED,status="done" if gate["done"] else "incomplete")
