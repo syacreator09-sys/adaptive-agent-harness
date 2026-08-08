@@ -1,7 +1,7 @@
 from __future__ import annotations
 from pathlib import Path
 from ..artifacts import ArtifactStore
-from ..evidence import EvidenceStore
+from ..evidence import EvidenceStore, redact_data
 from ..state import RunStateStore
 from ..final_gate import FinalGate, normalize_rubric, normalize_findings
 from ..project_adapter import ProjectAdapter
@@ -86,10 +86,11 @@ class BaseRunner:
             if allowed is not None and role not in allowed:
                 self._record_policy_violation(run,role,name)
                 continue
-            if isinstance(value,(dict,list)):
-                self.store.write_json(run.run_dir,name,value)
+            safe_value=redact_data(value)
+            if isinstance(safe_value,(dict,list)):
+                self.store.write_json(run.run_dir,name,safe_value)
             else:
-                self.store.write_text(run.run_dir,name,str(value))
+                self.store.write_text(run.run_dir,name,str(safe_value))
         ev=EvidenceStore(run.run_dir)
         for rec in result.get("evidence") or []:
             ev.append(rec)
@@ -116,7 +117,7 @@ class BaseRunner:
             "done":gate["done"],
             "gate":gate,
             "state":state,
-            "extra":extra or {},
+            "extra":redact_data(extra or {}),
         }
         self.store.write_json(run.run_dir,"FINAL_REPORT.json",report)
         lines=[
